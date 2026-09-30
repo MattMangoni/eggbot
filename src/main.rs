@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use egg::{Mood, egg};
 use gpui_kit::assets::{Assets, IconName};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 actions!(eggbot, [Quit, CloseWindow]);
 
 // the default bundle has only the component icons; add the extra ones we use
-gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil]);
 
 struct AppAssets;
 
@@ -119,6 +119,9 @@ const PRESETS: [Preset; 4] = [
 ];
 const STYLE: &str = " Reply in concise GitHub-flavored markdown.";
 
+const SHELLS: [u32; 8] = [0xF5C6A5, 0xC6DDB8, 0xD6CAF0, 0xF3DF9C, 0xB9D8EA, 0xF2B8C6, 0xCFE3D8, 0xE3D2B9];
+const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
+
 const ROW_H: f32 = 60.;
 const ROW_GAP: f32 = 4.;
 
@@ -148,6 +151,13 @@ struct Bot {
     msgs: Vec<Msg>,
     #[serde(default)]
     schedules: Vec<schedule::Schedule>,
+    /// Edits made in the bot editor; None = the preset's value.
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    color: Option<u32>,
+    #[serde(default)]
+    model: Option<String>,
     #[serde(skip, default = "hatched_long_ago")]
     born: Instant,
     #[serde(skip)]
@@ -175,6 +185,22 @@ fn hatched_long_ago() -> Instant {
 impl Bot {
     fn preset(&self) -> &'static Preset {
         &PRESETS[self.preset.min(PRESETS.len() - 1)]
+    }
+
+    fn color(&self) -> u32 {
+        self.color.unwrap_or(self.preset().color)
+    }
+
+    fn role(&self) -> &str {
+        self.role.as_deref().unwrap_or(self.preset().role)
+    }
+
+    /// Sidebar subtitle: the preset blurb, or the start of an edited role.
+    fn blurb(&self) -> String {
+        match &self.role {
+            Some(r) => r.lines().next().unwrap_or_default().chars().take(60).collect(),
+            None => self.preset().blurb.to_string(),
+        }
     }
 
     fn busy(&self) -> bool {
@@ -247,6 +273,10 @@ struct Eggbot {
     sched_prompt: Entity<InputState>,
     sched_value: Entity<InputState>,
     sched_error: Option<String>,
+    edit_open: bool,
+    edit_name: Entity<InputState>,
+    edit_role: Entity<TextareaState>,
+    edit_error: Option<String>,
     scroll: ScrollHandle,
 }
 
@@ -267,6 +297,18 @@ impl Eggbot {
         input.update(cx, |s, cx| s.focus(window, cx));
         let sched_prompt = cx.new(|cx| InputState::new(window, cx).placeholder("What should it do? e.g. Review yesterday's commits"));
         let sched_value = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
+        let edit_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
+        let edit_role = cx.new(|cx| {
+            let mut role = TextareaState::new(window, cx).placeholder("What is this bot for, and how should it work?");
+            role.set_auto_grow(4, 12, cx);
+            role
+        });
+        cx.subscribe_in(&edit_name, window, |this, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                this.save_edit(window, cx);
+            }
+        })
+        .detach();
         for field in [&sched_prompt, &sched_value] {
             cx.subscribe_in(field, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -289,7 +331,7 @@ impl Eggbot {
         .detach();
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.usage) = (s.bots, s.next_id, s.usage);
@@ -410,6 +452,9 @@ impl Eggbot {
             session: None,
             msgs: vec![],
             schedules: vec![],
+            role: None,
+            color: None,
+            model: None,
             born: Instant::now() + delay,
             poked: None,
             pokes: 0,
@@ -441,6 +486,8 @@ impl Eggbot {
         self.selected = i;
         self.menu_open = false;
         self.confirm_delete = None;
+        self.edit_open = false;
+        self.sched_open = false;
         self.scroll.scroll_to_bottom();
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
@@ -459,7 +506,8 @@ impl Eggbot {
     }
 
     fn start_turn(&mut self, id: usize, prompt: String, hops: u32, cx: &mut Context<Self>) {
-        let roster: Vec<(usize, &str, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str(), b.preset().blurb)).collect();
+        let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
+        let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster, id);
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         bot.stopped = false;
@@ -472,8 +520,9 @@ impl Eggbot {
             bot: id,
             mount: bot.folder.clone().unwrap_or(scratch),
             prompt,
-            role: format!("{}{others}{STYLE}", bot.preset().role),
+            role: format!("{}{others}{STYLE}", bot.role()),
             session: bot.session.clone(),
+            model: bot.model.clone(),
         };
         let (handle, events) = claude::run(turn);
         bot.run = Some(handle);
@@ -504,7 +553,7 @@ impl Eggbot {
         let names: Vec<(usize, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str())).collect();
         let targets = handoff::mentions(&reply, &names, from);
         let Some(sender) = self.bots.iter().find(|b| b.id == from) else { return };
-        let (from_name, color, folder) = (sender.name.clone(), sender.preset().color, sender.folder.clone());
+        let (from_name, color, folder) = (sender.name.clone(), sender.color(), sender.folder.clone());
         let next = hops + 1;
         for to in targets {
             let Some(target) = self.bots.iter_mut().find(|b| b.id == to) else { continue };
@@ -559,6 +608,43 @@ impl Eggbot {
             }
             (Err(e), _) => self.sched_error = Some(e.into()),
             _ => {}
+        }
+        cx.notify();
+    }
+
+    fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.get(self.selected) else { return };
+        let (name, role) = (bot.name.clone(), bot.role().to_string());
+        self.edit_name.update(cx, |s, cx| {
+            s.set_value(name, window, cx);
+            s.focus(window, cx);
+        });
+        self.edit_role.update(cx, |s, cx| s.set_value(role, window, cx));
+        self.edit_open = true;
+        self.sched_open = false;
+        self.edit_error = None;
+        cx.notify();
+    }
+
+    fn save_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.edit_name.read(cx).value().trim().to_string();
+        let role = self.edit_role.read(cx).value().trim().to_string();
+        let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
+        let taken = self.bots.iter().any(|b| b.id != id && b.name.eq_ignore_ascii_case(&name));
+        self.edit_error = match () {
+            _ if name.is_empty() || name.chars().count() > 24 => Some("Use a name of 1 to 24 characters".into()),
+            _ if taken => Some("Another bot already has this name (@mentions need unique names)".into()),
+            _ if role.is_empty() => Some("Write a role, even a short one".into()),
+            _ => None,
+        };
+        if self.edit_error.is_none()
+            && let Some(bot) = self.bots.get_mut(self.selected)
+        {
+            bot.name = name;
+            bot.role = (role != bot.preset().role).then_some(role);
+            self.edit_open = false;
+            self.save();
+            self.input.update(cx, |s, cx| s.focus(window, cx));
         }
         cx.notify();
     }
@@ -743,7 +829,7 @@ impl Eggbot {
                 .cursor_pointer()
                 .when(!active, |d| d.hover(|d| d.bg(p.card.opacity(0.5))))
                 .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
-                .child(egg(format!("side-{}", b.id), hex(b.preset().color), 30., b.mood()))
+                .child(egg(format!("side-{}", b.id), hex(b.color()), 30., b.mood()))
                 .child(
                     div()
                         .flex()
@@ -754,7 +840,7 @@ impl Eggbot {
                         .child(div().text_xs().text_color(p.muted).truncate().child(match (b.busy(), b.queue.len()) {
                             (true, 0) => "thinking…".to_string(),
                             (true, n) => format!("thinking… · {n} queued"),
-                            _ => b.preset().blurb.to_string(),
+                            _ => b.blurb(),
                         })),
                 )
                 .child(trash)
@@ -889,7 +975,12 @@ impl Eggbot {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.menu_open = false;
                         this.hatch(i, Duration::ZERO, cx);
-                        this.input.update(cx, |s, cx| s.focus(window, cx));
+                        if PRESETS[i].name == "Custom" {
+                            this.open_editor(window, cx);
+                        } else {
+                            this.edit_open = false;
+                            this.input.update(cx, |s, cx| s.focus(window, cx));
+                        }
                         cx.notify();
                     }))
                     .child(egg(format!("preset-{i}"), hex(preset.color), 20., Mood::Unborn))
@@ -922,7 +1013,7 @@ impl Eggbot {
                 .into_any_element();
         };
         let sel = self.selected;
-        let color = hex(bot.preset().color);
+        let color = hex(bot.color());
 
         let header = div()
             .flex()
@@ -948,7 +1039,26 @@ impl Eggbot {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(bot.name.clone()))
+                    .child(
+                        div()
+                            .id("bot-name")
+                            .group("name")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.edit_open {
+                                    this.edit_open = false;
+                                    cx.notify();
+                                } else {
+                                    this.open_editor(window, cx);
+                                }
+                            }))
+                            .child(bot.name.clone())
+                            .child(div().text_color(p.muted).opacity(if self.edit_open { 1. } else { 0. }).group_hover("name", |s| s.opacity(1.)).child(Icon::new(IconName::Pencil).size_3())),
+                    )
                     .child(
                         div()
                             .flex()
@@ -956,7 +1066,10 @@ impl Eggbot {
                             .gap_2()
                             .text_xs()
                             .text_color(p.muted)
-                            .child("claude")
+                            .child(match &bot.model {
+                                Some(m) => format!("claude · {m}"),
+                                None => "claude".into(),
+                            })
                             .child("·")
                             .child(div().size(px(6.)).rounded_full().bg(if bot.busy() { p.amber } else { p.ok }))
                             .child(if bot.busy() { "working" } else { "idle" }),
@@ -980,6 +1093,7 @@ impl Eggbot {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.sched_open = !this.sched_open;
                         this.sched_error = None;
+                        this.edit_open = false;
                         if this.sched_open {
                             this.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
                         }
@@ -1030,7 +1144,7 @@ impl Eggbot {
                         .child(egg(format!("hero-{}", bot.id), color, 88., bot.mood())),
                 )
                 .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(format!("Say hi to {}", bot.name)))
-                .child(div().text_sm().text_color(p.muted).child(bot.preset().blurb))
+                .child(div().text_sm().text_color(p.muted).child(bot.blurb()))
                 .into_any_element()
         } else {
             let msgs = bot.msgs.iter().enumerate().map(|(i, m)| self.message(bot, i, m, cx));
@@ -1090,13 +1204,104 @@ impl Eggbot {
         );
 
         // new id per bot, so switching bots replays the fade
-        let content = div().flex_1().flex().flex_col().min_h_0().child(header).when(self.sched_open, |d| d.child(self.schedules(bot, cx))).child(body).with_animation(
+        let content = div().flex_1().flex().flex_col().min_h_0().child(header).when(self.sched_open, |d| d.child(self.schedules(bot, cx))).when(self.edit_open, |d| d.child(self.editor(bot, cx))).child(body).with_animation(
             ElementId::Name(format!("chat-{}", bot.id).into()),
             Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
             |d, t| d.opacity(t).mt(px(6. * (1. - t))),
         );
 
         div().flex_1().flex().flex_col().h_full().child(content).child(composer).into_any_element()
+    }
+
+    /// The bot editor: name, role, egg color, model. Color and model apply at once; name and role on Save.
+    fn editor(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let current = bot.color();
+        let swatches = SHELLS.iter().map(|&c| {
+            div()
+                .id(("shell", c as usize))
+                .size(px(22.))
+                .rounded_full()
+                .bg(hex(c))
+                .cursor_pointer()
+                .border_2()
+                .border_color(if c == current { p.ink } else { p.card })
+                .hover(|d| d.border_color(p.muted))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(b) = this.bots.get_mut(this.selected) {
+                        b.color = (c != b.preset().color).then_some(c);
+                        this.save();
+                        cx.notify();
+                    }
+                }))
+        });
+        let models = MODELS.iter().enumerate().map(|(k, (alias, label))| {
+            let on = bot.model.as_deref() == *alias;
+            div()
+                .id(("model", k))
+                .px_3()
+                .py_1()
+                .rounded_full()
+                .text_xs()
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.ink).text_color(p.bg))
+                .when(!on, |d| d.border_1().border_color(p.line).text_color(p.muted).hover(|d| d.text_color(p.ink)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(b) = this.bots.get_mut(this.selected) {
+                        b.model = alias.map(str::to_string);
+                        this.save();
+                        cx.notify();
+                    }
+                }))
+                .child(*label)
+        });
+        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
+        let field = |d: Div| d.px_3().py_1().rounded(px(10.)).bg(p.bg).border_1().border_color(p.line);
+        div()
+            .mx_6()
+            .mt_3()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .rounded(px(16.))
+            .bg(p.card)
+            .border_1()
+            .border_color(p.line)
+            .shadow_sm()
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .child(div().flex_1().flex().flex_col().gap_1().child(label("Name")).child(field(div()).child(Input::new(&self.edit_name).appearance(false))))
+                    .child(div().flex().flex_col().gap_1().child(label("Model")).child(div().flex().items_center().gap_1().children(models))),
+            )
+            .child(div().flex().flex_col().gap_1().child(label("Role")).child(field(div()).child(Textarea::new(&self.edit_role).appearance(false))))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(label("Egg"))
+                    .children(swatches)
+                    .child(div().flex_1())
+                    .when_some(self.edit_error.clone(), |d, e| d.child(div().text_xs().text_color(p.amber).child(e)))
+                    .child(
+                        div()
+                            .id("save-edit")
+                            .px_4()
+                            .py_1()
+                            .rounded_full()
+                            .bg(p.amber)
+                            .text_sm()
+                            .text_color(hex(0x2B2621))
+                            .cursor_pointer()
+                            .hover(|d| d.opacity(0.85))
+                            .on_click(cx.listener(|this, _, window, cx| this.save_edit(window, cx)))
+                            .child("Save"),
+                    ),
+            )
+            .with_animation("edit-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
 
     /// The clock panel: this bot's schedules and a form to add one.
@@ -1205,7 +1410,7 @@ impl Eggbot {
             .flex()
             .items_end()
             .gap_3()
-            .child(egg(format!("typing-{}", bot.id), hex(bot.preset().color), 24., Mood::Thinking))
+            .child(egg(format!("typing-{}", bot.id), hex(bot.color()), 24., Mood::Thinking))
             .child(div().h(px(24.)).flex().items_end().gap(px(5.)).pb_1().children((0..3).map(dot)))
             .when_some(bot.status.clone(), |d, s| d.child(div().pb_1().text_xs().text_color(muted).child(s)))
             .with_animation("typing-in", Animation::new(Duration::from_millis(200)), |d, t| d.opacity(t))
@@ -1223,7 +1428,7 @@ impl Eggbot {
                     .flex()
                     .items_start()
                     .gap_3()
-                    .child(div().mt_1().child(egg(format!("msg-{}-{i}", bot.id), hex(bot.preset().color), 24., if streaming { Mood::Thinking } else { Mood::Still })))
+                    .child(div().mt_1().child(egg(format!("msg-{}-{i}", bot.id), hex(bot.color()), 24., if streaming { Mood::Thinking } else { Mood::Still })))
                     .child(
                         div().max_w(px(640.)).px_4().py_3().rounded(px(18.)).bg(p.card).border_1().border_color(p.line).child(
                             TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true),

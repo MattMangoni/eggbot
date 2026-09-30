@@ -35,6 +35,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Quit | Ask when bots are working, then stop their turns; containers stay | |
 | Login item | Not now; needs an app bundle | |
 | Schedules | Clock button in bot header; daily, weekdays, every N hours, every N minutes; missed → run once on return; busy → queue | 5b |
+| Bot editor | Click the name in the header; edit name (unique, ≤24), role, egg color (8 shells), model (Default/Fable/Opus/Sonnet/Haiku via `--model`) | Color + model apply at once; name + role on Save. "Custom" opens the editor on hatch |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
@@ -43,4 +44,5 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 2. Real CLI on host, streaming, persistence — done
 3. Containers — done (folder picker, delete, stop confirmed by Matteo)
 4. Handoff — done (first-run "unpaused" handoff was a manual Continue click)
-5. Menu bar (5a, done) + schedules (5b, built; scheduler verified, clock panel awaits manual test)
+5. Menu bar (5a) + schedules (5b) — done
+6. Bot editor — built (click the name in the header)

@@ -9,6 +9,7 @@ Observed 2026-09-30 with Claude Code 2.1.286. Raw sample: run
 - `--include-partial-messages` — adds `stream_event` lines with token deltas (for live typing).
 - `--resume <session_id>` / `--session-id <uuid>` — continue or pin a conversation (bot memory).
 - `--append-system-prompt <text>` — role prompt on top of Claude Code's own.
+- `--model <alias|full name>` — aliases seen in help 2.1.286: `fable`, `opus`, `sonnet`; `haiku` also works (verified: `claude-haiku-4-5-20251001` in the session transcript).
 - `--permission-mode acceptEdits|auto|bypassPermissions|manual|dontAsk|plan`.
 - `--allowedTools` / `--disallowedTools`, `--add-dir`.
 - `--setting-sources user,project,local` — which settings load. Without it the bot inherits the user's global hooks, skills, plugins and CLAUDE.md.

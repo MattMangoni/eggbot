@@ -48,6 +48,8 @@ pub struct Turn {
     pub prompt: String,
     pub role: String,
     pub session: Option<String>,
+    /// `--model` alias (opus, sonnet, haiku); None = the CLI default.
+    pub model: Option<String>,
 }
 
 /// Runs one `claude -p` turn in the bot's container; events arrive on the channel, which closes at the end.
@@ -81,6 +83,9 @@ fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
         .stderr(Stdio::piped());
     if let Some(s) = &t.session {
         cmd.args(["--resume", s]);
+    }
+    if let Some(m) = &t.model {
+        cmd.args(["--model", m]);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not run docker: {e}"))?;
     let stdout = child.stdout.take().unwrap();
