@@ -1535,6 +1535,8 @@ impl Eggbot {
                         b.provider = pr;
                         b.model = None;
                         b.effort = None;
+                        // the meter tracks the provider's session; it refills on the next turn
+                        b.context = (0, 0);
                         this.selects_stale = true;
                         if pr == Provider::Codex && this.codex_models.is_empty() {
                             this.refresh_codex(1, cx);
