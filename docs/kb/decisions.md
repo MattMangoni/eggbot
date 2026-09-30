@@ -56,6 +56,9 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Appearance | View menu: Match System / Light / Dark, ⌘⇧D cycles, saved in state.json | Matteo chose the menu over a sidebar button |
 | App bundle | `scripts/bundle.sh` → `~/Applications/eggbot.app`, id `com.digitalmaze.eggbot`, ad-hoc signed, icon drawn by `scripts/icon.swift` | Needed for native notifications; no cargo-bundle |
 | Proactive messages | Notify on reply / scheduled run / chain end or pause / error; only when eggbot is in the background; unread dot + menu bar badge; scheduled runs may reply QUIET | Matteo chose all four triggers, bundle first, quiet runs, unread dot |
+| Settings | ⌘, panel in the window: Start at login switch + "Instructions for all bots" | Matteo chose one Settings panel |
+| Start at login | SMAppService.mainApp; a login launch starts hidden (menu bar egg only), detected by the `oapp` Apple event with `lgit` | Matteo chose menu bar only |
+| Shared instructions | One text for all bots on both providers, default = the old style line; NOTES rule stays fixed; Codex BASE plumbing not editable | Editing BASE could break role delivery |
 
 ## Phases
 

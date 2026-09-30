@@ -14,3 +14,7 @@ Bots never reset, so context only grows. Both CLIs auto-compact near the limit (
 
 - Codex: `thread/resume` and `thread/fork` ignore new `developerInstructions`, and a user message cannot override developer instructions. Fix: fixed `BASE` developer instructions that delegate to `<eggbot-context>` blocks; eggbot sends the role in such a block on a thread's first turn and whenever it changes (`Bot.codex_role`). Verified: new block applied, memory kept.
 - Claude: by default the system prompt is snapshotted on the first request (`--system-prompt-snapshot on`), so a later `--append-system-prompt` is ignored on resume. Fix: `--system-prompt-snapshot off` (verified also for sessions recorded with snapshot on).
+
+## Instructions for all bots
+
+Settings holds one text every bot gets after its role, roster and notes rule (`Saved.shared`, None = `SHARED`, the old style line). It is part of the role string, so it reaches running sessions like a role edit: Claude re-reads `--append-system-prompt` every turn; Codex sees a changed role and sends a new `<eggbot-context>` block once.

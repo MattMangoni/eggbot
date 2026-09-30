@@ -94,3 +94,6 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - Forced light/dark: set `NSApplication.appearance` (`NSAppearanceNameAqua` / `DarkAqua`, nil = system). The window's effective appearance follows, so `Theme::sync_system_appearance`, the vibrancy view, menus and popovers all switch together.
 - Multi-line `Textarea` adds its own inset (`Size::input_px()`, 10px at medium) even with `appearance(false)`; count it when aligning with neighbours.
 - Checked menu items: build `MenuItem::Action { checked, .. }` directly and call `cx.set_menus` again when the state changes.
+- Starting hidden: `WindowOptions { show: false, .. }`; `window.activate_window()` later shows it. GPUI's `run` callback runs inside `applicationDidFinishLaunching`, so `NSAppleEventManager.currentAppleEvent` still holds the launch event there.
+- objc2-foundation hides `NSAppleEventDescriptor.eventID` / `paramDescriptorForKeyword` behind the large `objc2-core-services` feature; a raw `msg_send!` avoids it.
+- System Events keystrokes go to whatever app is in front: set eggbot frontmost in the same osascript call, or test text lands in the terminal.

@@ -2,6 +2,7 @@ mod claude;
 mod codex;
 mod egg;
 mod handoff;
+mod login;
 mod notify;
 mod sandbox;
 mod schedule;
@@ -21,7 +22,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -182,7 +183,8 @@ const PRESETS: [Preset; 4] = [
     },
     Preset { name: "Custom", blurb: "A blank bot you shape yourself", color: 0xF3DF9C, role: "You are a helpful bot living in eggbot." },
 ];
-const STYLE: &str = " Reply in concise GitHub-flavored markdown.";
+/// "Instructions for all bots" until the user edits them in Settings.
+const SHARED: &str = "Reply in concise GitHub-flavored markdown.";
 const NOTES: &str = " You keep your own notes in /memory/NOTES.md. When a session starts, read it if it exists. Keep it short and current: durable facts about the user, the project, decisions and open work, never chat logs.";
 const QUIET: &str = "\n\n(This is a scheduled run. If nothing here needs the user's attention, reply with exactly QUIET and nothing else.)";
 const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md now with everything worth keeping from this session, then reply with one short line.";
@@ -337,6 +339,9 @@ struct Saved {
     sidebar_w: f32,
     #[serde(default)]
     appearance: Appearance,
+    /// Instructions for all bots; None = `SHARED`.
+    #[serde(default)]
+    shared: Option<String>,
 }
 
 fn default_sidebar() -> f32 {
@@ -367,6 +372,10 @@ struct Eggbot {
     edit_open: bool,
     edit_name: Entity<InputState>,
     edit_role: Entity<TextareaState>,
+    settings_open: bool,
+    edit_shared: Entity<TextareaState>,
+    shared: Option<String>,
+    login_error: Option<String>,
     edit_error: Option<String>,
     model_select: Entity<SelectState<Vec<Choice>>>,
     effort_select: Entity<SelectState<Vec<Choice>>>,
@@ -404,6 +413,11 @@ impl Eggbot {
         let sched_prompt = cx.new(|cx| InputState::new(window, cx).placeholder("What should it do? e.g. Review yesterday's commits"));
         let sched_value = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
         let edit_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
+        let edit_shared = cx.new(|cx| {
+            let mut shared = TextareaState::new(window, cx).placeholder("e.g. Reply in Italian. Never push to git.");
+            shared.set_auto_grow(3, 10, cx);
+            shared
+        });
         let edit_role = cx.new(|cx| {
             let mut role = TextareaState::new(window, cx).placeholder("What is this bot for, and how should it work?");
             role.set_auto_grow(4, 12, cx);
@@ -474,10 +488,10 @@ impl Eggbot {
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: true, resizing: false, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, resizing: false, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id, this.meters, this.sidebar_w) = (s.bots, s.next_id, s.meters, s.sidebar_w);
+                (this.bots, this.next_id, this.meters, this.sidebar_w, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.shared);
                 this.scroll.scroll_to_bottom();
             }
             _ => {
@@ -596,7 +610,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "appearance": self.appearance });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "appearance": self.appearance, "shared": self.shared });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -649,8 +663,34 @@ impl Eggbot {
         self.confirm_delete = None;
         self.edit_open = false;
         self.sched_open = false;
+        self.settings_open = false;
         self.scroll.scroll_to_bottom();
         self.input.update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());
+        self.edit_shared.update(cx, |s, cx| {
+            s.set_value(shared, window, cx);
+            s.focus(window, cx);
+        });
+        (self.settings_open, self.edit_open, self.sched_open, self.login_error) = (true, false, false, None);
+        cx.notify();
+    }
+
+    /// Saves the instructions for all bots; each bot gets them from its next turn (both providers).
+    fn save_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.edit_shared.read(cx).value().trim().to_string();
+        self.shared = (text != SHARED).then_some(text);
+        self.settings_open = false;
+        self.save();
+        self.input.update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+
+    fn set_login(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.login_error = login::set(on).err();
         cx.notify();
     }
 
@@ -694,6 +734,7 @@ impl Eggbot {
         let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
         let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster, id);
+        let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         bot.stopped = false;
         bot.hops = hops;
@@ -706,7 +747,7 @@ impl Eggbot {
                 eprintln!("eggbot: could not create {}: {e}", dir.display());
             }
         }
-        let role = format!("{}{others}{NOTES}{STYLE}", bot.role());
+        let role = format!("{}{others}{NOTES}\n\n{shared}", bot.role());
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
@@ -829,6 +870,7 @@ impl Eggbot {
         self.edit_role.update(cx, |s, cx| s.set_value(role, window, cx));
         self.edit_open = true;
         self.sched_open = false;
+        self.settings_open = false;
         self.edit_error = None;
         self.selects_stale = true;
         if self.bots[self.selected].provider == Provider::Codex && self.codex_models.is_empty() && self.codex_query != Some(None) {
@@ -1165,7 +1207,7 @@ fn add_vibrancy(window: &Window) {
 fn set_menus(appearance: Appearance, cx: &mut App) {
     let pick = |name: &str, a: Appearance| MenuItem::Action { name: name.to_string().into(), action: Box::new(a), os_action: None, checked: a == appearance, disabled: false };
     cx.set_menus([
-        Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
+        Menu { name: "eggbot".into(), items: vec![MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
         Menu {
             name: "View".into(),
             items: vec![pick("Match System", Appearance::System), pick("Light", Appearance::Light), pick("Dark", Appearance::Dark), MenuItem::separator(), MenuItem::action("Next Appearance", CycleAppearance)],
@@ -1190,6 +1232,8 @@ fn main() {
     unsafe { std::env::set_var("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}")) };
     gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
+        // opened by macOS at login: start quietly, with only the menu bar egg
+        let at_login = login::launched_at_login();
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
@@ -1200,6 +1244,7 @@ fn main() {
             KeyBinding::new("ctrl-tab", NextBot, None),
             KeyBinding::new("escape", StopTurn, None),
             KeyBinding::new("cmd-shift-d", CycleAppearance, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
         ]);
         cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectBot(n - 1), None)));
         let options = WindowOptions {
@@ -1211,6 +1256,7 @@ fn main() {
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(16.), px(16.))),
             }),
+            show: !at_login,
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -1218,6 +1264,10 @@ fn main() {
             cx.new(|cx| Eggbot::new(window, cx))
         })
         .unwrap();
-        cx.activate(true);
+        if at_login {
+            set_dock_icon(false);
+        } else {
+            cx.activate(true);
+        }
     });
 }

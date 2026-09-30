@@ -5,6 +5,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Sizable as _};
@@ -13,7 +14,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Eggbot, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Eggbot, OpenSettings, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -407,6 +408,7 @@ impl Eggbot {
         };
 
         let panels = div()
+            .when(self.settings_open, |d| d.child(self.settings(cx)))
             .when(self.edit_open, |d| d.child(self.editor(bot, cx)))
             .when(self.sched_open, |d| d.child(self.schedules(bot, cx)));
 
@@ -541,6 +543,7 @@ impl Eggbot {
                             .when(self.sched_open, |d| d.bg(p.hover).text_color(p.ink))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.sched_open = !this.sched_open;
+                                this.settings_open = false;
                                 this.sched_error = None;
                                 this.edit_open = false;
                                 if this.sched_open {
@@ -605,6 +608,56 @@ impl Eggbot {
                             })).child("Cancel"),
                         )
                         .child(primary("save-edit", p).on_click(cx.listener(|this, _, window, cx| this.save_edit(window, cx))).child("Save")),
+                ),
+        )
+    }
+
+    /// Settings (⌘,): start at login, and instructions every bot gets.
+    fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
+        let login = login::state();
+        let note = match (&self.login_error, &login) {
+            (Some(e), _) => Some(div().text_xs().text_color(p.err).child(e.clone()).into_any_element()),
+            (None, login::State::NeedsApproval) => Some(link("login-approve", p).child("Allow eggbot in System Settings → Login Items").on_click(|_, _, _| login::open_system_settings()).into_any_element()),
+            _ => None,
+        };
+        let on = !matches!(login, login::State::Off);
+        div().px_6().child(
+            self.panel()
+                .child(div().text_sm().text_color(p.ink).child("Settings"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().flex().flex_col().flex_1().child(div().text_sm().text_color(p.ink).child("Start at login")).child(label("Only the menu bar egg appears, and schedules keep running.")))
+                        .child(Switch::new("login").checked(on).on_click(cx.listener(|this, on: &bool, _, cx| this.set_login(*on, cx)))),
+                )
+                .children(note)
+                .child(div().h(px(1.)).bg(p.line))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_sm().text_color(p.ink).child("Instructions for all bots"))
+                        .child(label("Every bot gets these next to its own role, on Claude and Codex, from its next turn."))
+                        .child(div().mt_1().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Textarea::new(&self.edit_shared).appearance(false))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1())
+                        .child(
+                            button("cancel-settings", p).on_click(cx.listener(|this, _, _, cx| {
+                                this.settings_open = false;
+                                cx.notify();
+                            })).child("Cancel"),
+                        )
+                        .child(primary("save-settings", p).on_click(cx.listener(|this, _, window, cx| this.save_settings(window, cx))).child("Save")),
                 ),
         )
     }
@@ -892,6 +945,7 @@ impl Render for Eggbot {
                 }
             }))
             .on_action(cx.listener(|this, a: &Appearance, window, cx| this.set_appearance(*a, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
             .on_action(cx.listener(|this, _: &StopTurn, _, cx| {
                 if this.menu_open {
