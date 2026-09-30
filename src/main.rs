@@ -2,6 +2,7 @@ mod claude;
 mod egg;
 mod handoff;
 mod sandbox;
+mod tray;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use gpui_kit::component::{Icon, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
+
+actions!(eggbot, [Quit, CloseWindow]);
 
 fn hex(c: u32) -> Hsla {
     rgb(c).into()
@@ -188,6 +191,7 @@ struct Eggbot {
     /// Bot id whose trash icon was clicked once; a second click deletes.
     confirm_delete: Option<usize>,
     usage: Option<(f32, f32)>,
+    tray: Option<tray::Tray>,
     input: Entity<InputState>,
     scroll: ScrollHandle,
 }
@@ -209,7 +213,7 @@ impl Eggbot {
         input.update(cx, |s, cx| s.focus(window, cx));
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => (this.bots, this.next_id) = (s.bots, s.next_id),
             _ => {
@@ -219,7 +223,80 @@ impl Eggbot {
                 this.selected = 0;
             }
         }
+        window.on_window_should_close(cx, |_, cx| {
+            // closing only hides: the bots keep working and the menu bar egg brings the window back
+            cx.hide();
+            set_dock_icon(false);
+            false
+        });
+        if let Some((tray, actions)) = tray::Tray::new() {
+            this.tray = Some(tray);
+            cx.spawn_in(window, async move |this, cx| {
+                while let Ok(action) = actions.recv().await {
+                    let done = this.update_in(cx, |this, window, cx| match action {
+                        tray::Action::Open => this.show(window, cx),
+                        tray::Action::Bot(id) => {
+                            this.show(window, cx);
+                            if let Some(i) = this.bots.iter().position(|b| b.id == id) {
+                                this.select(i, window, cx);
+                            }
+                        }
+                        tray::Action::Quit => this.request_quit(window, cx),
+                    });
+                    if done.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+            cx.spawn(async move |this, cx| {
+                for tick in 0.. {
+                    cx.background_executor().timer(Duration::from_millis(350)).await;
+                    let alive = this.update(cx, |this, _| {
+                        let bots = this.bots.iter().map(|b| (b.id, b.name.clone(), b.busy())).collect();
+                        if let Some(t) = &mut this.tray {
+                            t.update(bots, tick);
+                        }
+                    });
+                    if alive.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         this
+    }
+
+    fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        set_dock_icon(true);
+        cx.activate(true);
+        window.activate_window();
+    }
+
+    /// Asks before stopping working bots; their containers stay for a fast next launch.
+    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let busy = self.bots.iter().filter(|b| b.busy()).count();
+        if busy == 0 {
+            return self.quit_now(cx);
+        }
+        self.show(window, cx);
+        let what = if busy == 1 { "1 bot is working".to_string() } else { format!("{busy} bots are working") };
+        let answer = window.prompt(PromptLevel::Warning, &what, Some("Quit anyway? Their current turns will stop."), &["Quit", "Cancel"], cx);
+        cx.spawn(async move |this, cx| {
+            if answer.await == Ok(0) {
+                this.update(cx, |this, cx| this.quit_now(cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn quit_now(&mut self, cx: &mut Context<Self>) {
+        for b in self.bots.iter().filter(|b| b.busy()) {
+            sandbox::interrupt(b.id);
+        }
+        self.save();
+        cx.quit();
     }
 
     fn save(&self) {
@@ -1078,14 +1155,30 @@ impl Render for Eggbot {
             .flex()
             .bg(self.p.bg)
             .text_color(self.p.ink)
+            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_quit(window, cx)))
+            .on_action(cx.listener(|_, _: &CloseWindow, _, cx| {
+                cx.hide();
+                set_dock_icon(false);
+            }))
             .child(self.sidebar(cx))
             .child(self.chat(cx))
+    }
+}
+
+/// The Dock icon shows only while the window is visible; the menu bar egg is always there.
+fn set_dock_icon(visible: bool) {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let policy = if visible { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
+        NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
     }
 }
 
 fn main() {
     gpui_kit::application().with_assets(Assets).run(|cx| {
         gpui_kit::init(cx);
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-w", CloseWindow, None)]);
+        cx.set_menus([Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false }]);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(720.)), cx))),
             titlebar: Some(TitlebarOptions {

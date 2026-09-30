@@ -26,6 +26,8 @@ Traps found:
 - `--disallowedTools Bash` is not enough for "no shell": `Monitor` runs commands, and `RemoteTrigger`/`CronCreate` create cloud agents/jobs. Use the `--tools` allowlist (comma-separated, one argument).
 - With those flags only two builtin plugins and the built-in skills remain; no user hooks run.
 
+- Claude Code moves long shell commands (e.g. `sleep 60`) to the background and can END the turn while they run; background tasks die when the `claude -p` process exits. A "busy" bot is only one whose turn is streaming. To test busy-state features, use a long text reply, not a long command.
+
 ## Event lines (by `type`)
 
 | type | what matters |

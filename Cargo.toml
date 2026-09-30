@@ -6,5 +6,8 @@ edition = "2024"
 [dependencies]
 async-channel = "2.5.0"
 gpui-kit = "0.7.0"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+tray-icon = "0.26.0"

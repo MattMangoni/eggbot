@@ -31,6 +31,10 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Hop limit | Chain pauses after 3 automatic handoffs; "Continue chain" resets the count | |
 | Busy receiver | Handoff queued, starts when the current turn ends | Queue is not persisted |
 | Handoff display | Card "From X" (sender color) in receiver, "→ sent to Y" in sender; both clickable | |
+| Background | Menu bar egg (`tray-icon`); closing the window hides it and the Dock icon | Egg wobbles while a bot works |
+| Quit | Ask when bots are working, then stop their turns; containers stay | |
+| Login item | Not now; needs an app bundle | |
+| Schedules | Clock button in bot header; daily, weekdays, every N hours, every N minutes; missed → run once on return; busy → queue | 5b |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
@@ -39,4 +43,4 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 2. Real CLI on host, streaming, persistence — done
 3. Containers — done (folder picker, delete, stop confirmed by Matteo)
 4. Handoff — done (first-run "unpaused" handoff was a manual Continue click)
-5. Menu bar + schedules
+5. Menu bar (5a, built + verified) + schedules (5b)

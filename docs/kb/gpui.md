@@ -58,3 +58,13 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 ## Focus
 
 - Nothing is focused on window open: call `input.update(cx, |s, cx| s.focus(window, cx))` in the view constructor, and again after any click that should return typing to the composer.
+
+## Background app (menu bar)
+
+- GPUI has no tray API; we use `tray-icon` 0.26 (+ its `muda` menus). Build the icon inside `application().run`, on the main thread. Use `with_icon_templated` / `set_icon_templated` (the `*_as_template` calls are deprecated).
+- Menu clicks: `MenuEvent::set_event_handler` → `async_channel` → a `cx.spawn_in(window, …)` loop with `update_in`.
+- Scripted clicks on the status item (System Events) do NOT open a tray-icon menu; only real mouse clicks do.
+- Keep the view alive when the window "closes": `window.on_window_should_close(cx, |_, cx| { cx.hide(); …; false })`.
+- Dock icon on/off: `objc2_app_kit::NSApplication::sharedApplication(mtm).setActivationPolicy(Regular|Accessory)` (safe fn in objc2-app-kit 0.3).
+- ⌘Q/⌘W: `actions!` + `cx.bind_keys` + `cx.set_menus`; handle with `.on_action(cx.listener(..))` on the root div.
+- Confirm dialogs: `window.prompt(PromptLevel::Warning, msg, Some(detail), &["Quit", "Cancel"], cx)` → oneshot with the button index.
