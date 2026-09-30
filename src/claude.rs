@@ -128,7 +128,7 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
     let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
     let mut cmd = Command::new("docker");
-    cmd.args(["exec", &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+    cmd.args(["exec", "-e", &sandbox::tz(), &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
         .args(["--append-system-prompt", &t.role])
         // clean bots with full power inside their own machine; no tools that reach outside it
         .args(["--setting-sources", "project,local", "--strict-mcp-config", "--permission-mode", "bypassPermissions"])

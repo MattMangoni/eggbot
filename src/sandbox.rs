@@ -21,6 +21,12 @@ pub fn container(bot: usize) -> String {
     format!("eggbot-{bot}")
 }
 
+/// `TZ=<zone>` for `docker exec`: the Mac's time zone, so bots see local dates and times.
+pub fn tz() -> String {
+    let zone = std::fs::read_link("/etc/localtime").ok().and_then(|p| p.to_str().and_then(|p| p.split("zoneinfo/").nth(1)).map(String::from));
+    format!("TZ={}", zone.unwrap_or_else(|| "UTC".into()))
+}
+
 fn run(cmd: &mut Command) -> Result<String, String> {
     let out = cmd.output().map_err(|e| format!("{e}"))?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();

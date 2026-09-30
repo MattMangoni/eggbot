@@ -33,3 +33,7 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 ## Launched from Finder
 
 Apps opened from Finder/Dock get `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `docker`/`colima` (Homebrew) are not found. `main()` prepends `/opt/homebrew/bin:/usr/local/bin` before GPUI starts. The docker context in `~/.docker` still works (HOME is set).
+
+## Time zone
+
+Containers run in UTC. Each `docker exec` gets `-e TZ=<zone>` from the Mac's `/etc/localtime` link (`sandbox::tz()`), so bots see local dates and a move to another zone applies on the next turn. The image already has `/usr/share/zoneinfo`.

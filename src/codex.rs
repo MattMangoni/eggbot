@@ -76,7 +76,7 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
     let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
     let mut cmd = Command::new("docker");
-    cmd.args(["exec", "-i", &name, "codex", "app-server"]);
+    cmd.args(["exec", "-i", "-e", &sandbox::tz(), &name, "codex", "app-server"]);
     let (child, mut rpc) = Rpc::start(cmd)?;
     *h.child.lock().unwrap() = Some(child);
     let result = converse(t, h, send, &mut rpc);
