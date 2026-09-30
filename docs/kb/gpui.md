@@ -14,7 +14,8 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 
 ## Theme
 
-- `Theme::update(cx, |t| { t.background = ..; })` — fields come from `ThemeColor` via Deref. Use `update`, not `global_mut`, so copies and windows stay in sync.
+- `Theme::update(cx, |t| { t.background = ..; })` — fields come from `ThemeColor` via Deref. Use `update`, not `global_mut`, so copies and windows stay in sync (it also re-installs markdown TextView colors).
+- Dark mode: `Theme::sync_system_appearance(Some(window), cx)` first (it reloads stock colors), then our colors in a separate `Theme::update`. Re-run on `cx.observe_window_appearance(window, ..)`. See `Palette::apply` in `src/main.rs`.
 
 ## Input
 
@@ -30,6 +31,7 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 
 - `el.with_animation(id, Animation::new(dur).repeat().with_easing(ease_out_quint()), |el, t| ..)`. State is keyed by id: change the id to restart.
 - A one-shot animation keeps its last frame; to switch mode afterwards, re-render (we spawn a timer then `cx.notify()`).
+- A spring retargets smoothly when `.to(..)` changes between renders (same id) — used for the sidebar selection card.
 - Springs exist: `el.with_spring(id, SpringAnimation::new(SpringConfig::new(170., damping, 1.)).to(value), |el, v| ..)`.
 - Divs cannot rotate (`Transformation` is svg-only). For rotation, paint with `canvas` + `PathBuilder` and transform points yourself (see `src/egg.rs`).
 

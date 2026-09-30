@@ -16,6 +16,7 @@ struct Pose {
 
 const REST: Pose = Pose { rot: 0., squash: 0., blink: 0., look: 0., crack: 0., face: 1. };
 pub const HATCH: Duration = Duration::from_millis(1800);
+pub const BOING: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mood {
@@ -23,14 +24,26 @@ pub enum Mood {
     Hatching,
     Idle,
     Thinking,
+    /// No animation, for eggs that repeat many times (chat history).
+    Still,
+    /// Squash-and-stretch after a click; the counter restarts the animation.
+    Boing(u32),
 }
 
 pub fn egg(id: impl Into<SharedString>, color: Hsla, w: f32, mood: Mood) -> AnyElement {
     let id: SharedString = id.into();
     let base = div().w(px(w)).h(px(w * 1.3));
-    let draw = move |el: Div, pose: Pose| el.child(paint(color, pose));
+    let draw = move |el: Div, pose: Pose| el.child(paint(color, w, pose));
     match mood {
         Mood::Unborn => draw(base, Pose { face: 0., ..REST }).into_any_element(),
+        Mood::Still => draw(base, REST).into_any_element(),
+        Mood::Boing(n) => base
+            .with_animation(
+                ElementId::Name(format!("{id}-boing-{n}").into()),
+                Animation::new(BOING),
+                move |el, t| draw(el, Pose { squash: 0.28 * (-5. * t).exp() * (t * TAU * 2.5).sin(), ..REST }),
+            )
+            .into_any_element(),
         Mood::Hatching => base
             .with_animation(
                 ElementId::Name(format!("{id}-hatch").into()),
@@ -80,7 +93,7 @@ fn hatch(t: f32) -> Pose {
     }
 }
 
-fn paint(color: Hsla, pose: Pose) -> impl IntoElement {
+fn paint(color: Hsla, size: f32, pose: Pose) -> impl IntoElement {
     canvas(|_, _, _| {}, move |b, _, window, _| {
         let (w, h) = (b.size.width.as_f32(), b.size.height.as_f32());
         let (ox, oy) = (b.origin.x.as_f32(), b.origin.y.as_f32());
@@ -96,14 +109,15 @@ fn paint(color: Hsla, pose: Pose) -> impl IntoElement {
 
         let mut shadow = PathBuilder::fill();
         ellipse(&mut shadow, point(px(ox + w / 2.), px(oy + h - 1.)), s * 0.34, s * 0.05);
-        paint_path(window, shadow, black().opacity(0.08));
+        paint_path(window, shadow, black().opacity(0.12));
 
         let mut shell = PathBuilder::fill();
         shell.move_to(at(0.5, 0.));
-        shell.cubic_bezier_to(at(1., 0.78), at(0.82, 0.), at(1., 0.36));
-        shell.cubic_bezier_to(at(0.5, 1.3), at(1., 1.1), at(0.8, 1.3));
-        shell.cubic_bezier_to(at(0., 0.78), at(0.2, 1.3), at(0., 1.1));
-        shell.cubic_bezier_to(at(0.5, 0.), at(0., 0.36), at(0.18, 0.));
+        // narrow top, widest point below the middle
+        shell.cubic_bezier_to(at(1., 0.82), at(0.76, 0.), at(1., 0.4));
+        shell.cubic_bezier_to(at(0.5, 1.3), at(1., 1.12), at(0.8, 1.3));
+        shell.cubic_bezier_to(at(0., 0.82), at(0.2, 1.3), at(0., 1.12));
+        shell.cubic_bezier_to(at(0.5, 0.), at(0., 0.4), at(0.24, 0.));
         shell.close();
         paint_path(window, shell, color);
 
@@ -112,15 +126,17 @@ fn paint(color: Hsla, pose: Pose) -> impl IntoElement {
         paint_path(window, gloss, white().opacity(0.45));
 
         let ink = hsla(30. / 360., 0.12, 0.16, pose.face);
-        let eye_h = s * 0.07 * (1. - pose.blink).max(0.12);
+        // small eggs get relatively bigger eyes so the face still reads
+        let k = (44. / size).clamp(1., 1.6);
+        let eye_h = s * 0.07 * k * (1. - pose.blink).max(0.12);
         for x in [0.36, 0.64] {
             let mut eye = PathBuilder::fill();
-            ellipse(&mut eye, at(x + pose.look * 0.04, 0.78), s * 0.055, eye_h);
+            ellipse(&mut eye, at(x + pose.look * 0.04, 0.8), s * 0.055 * k, eye_h);
             paint_path(window, eye, ink);
         }
         for x in [0.25, 0.75] {
             let mut cheek = PathBuilder::fill();
-            ellipse(&mut cheek, at(x, 0.92), s * 0.07, s * 0.035);
+            ellipse(&mut cheek, at(x, 0.95), s * 0.07, s * 0.035);
             paint_path(window, cheek, hsla(10. / 360., 0.9, 0.7, 0.35 * pose.face));
         }
 
