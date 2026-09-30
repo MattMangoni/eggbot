@@ -25,12 +25,13 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
-- `src/tray.rs` — menu bar egg icon and menu.
+- `src/tray.rs` — menu bar egg icon (unread badge) and menu.
+- `src/notify.rs` — macOS notifications (bundle only); a click opens the bot.
 - `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
 - `scripts/icon.swift` — draws the app icon (used by `bundle.sh`).
 - `src/egg.rs` — small vector egg avatar (still, or wobbling while working).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`.
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`, `notifications.md`.
 
 ## Hard rules
 

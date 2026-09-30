@@ -2,6 +2,7 @@ mod claude;
 mod codex;
 mod egg;
 mod handoff;
+mod notify;
 mod sandbox;
 mod schedule;
 mod tray;
@@ -183,6 +184,7 @@ const PRESETS: [Preset; 4] = [
 ];
 const STYLE: &str = " Reply in concise GitHub-flavored markdown.";
 const NOTES: &str = " You keep your own notes in /memory/NOTES.md. When a session starts, read it if it exists. Keep it short and current: durable facts about the user, the project, decisions and open work, never chat logs.";
+const QUIET: &str = "\n\n(This is a scheduled run. If nothing here needs the user's attention, reply with exactly QUIET and nothing else.)";
 const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md now with everything worth keeping from this session, then reply with one short line.";
 
 /// A dropdown option: what is shown, and what is stored (None = the provider's default).
@@ -279,6 +281,9 @@ struct Bot {
     /// Tokens in the main session's context and the model's window (0 = unknown).
     #[serde(default)]
     context: (u64, u64),
+    /// Something arrived that the user has not seen yet.
+    #[serde(default)]
+    unread: bool,
 }
 
 impl Bot {
@@ -369,6 +374,8 @@ struct Eggbot {
     selects_stale: bool,
     sidebar_w: f32,
     appearance: Appearance,
+    /// The window is in front; otherwise news goes out as notifications.
+    active: bool,
     /// Dragging the sidebar's edge.
     resizing: bool,
     scroll: ScrollHandle,
@@ -467,7 +474,7 @@ impl Eggbot {
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, resizing: false, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: true, resizing: false, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w) = (s.bots, s.next_id, s.meters, s.sidebar_w);
@@ -491,42 +498,49 @@ impl Eggbot {
             set_dock_icon(false);
             false
         });
-        if let Some((tray, actions)) = tray::Tray::new() {
-            this.tray = Some(tray);
-            cx.spawn_in(window, async move |this, cx| {
-                while let Ok(action) = actions.recv().await {
-                    let done = this.update_in(cx, |this, window, cx| match action {
-                        tray::Action::Open => this.show(window, cx),
-                        tray::Action::Bot(id) => {
-                            this.show(window, cx);
-                            if let Some(i) = this.bots.iter().position(|b| b.id == id) {
-                                this.select(i, window, cx);
-                            }
+        cx.observe_window_activation(window, |this, window, cx| {
+            this.active = window.is_window_active();
+            if this.active {
+                this.mark_read(cx);
+            }
+        })
+        .detach();
+        let (clicks, actions) = async_channel::unbounded();
+        notify::init(clicks.clone());
+        this.tray = tray::Tray::new(clicks);
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(action) = actions.recv().await {
+                let done = this.update_in(cx, |this, window, cx| match action {
+                    tray::Action::Open => this.show(window, cx),
+                    tray::Action::Bot(id) => {
+                        this.show(window, cx);
+                        if let Some(i) = this.bots.iter().position(|b| b.id == id) {
+                            this.select(i, window, cx);
                         }
-                        tray::Action::Quit => this.request_quit(window, cx),
-                    });
-                    if done.is_err() {
-                        break;
                     }
+                    tray::Action::Quit => this.request_quit(window, cx),
+                });
+                if done.is_err() {
+                    break;
                 }
-            })
-            .detach();
-            cx.spawn(async move |this, cx| {
-                for tick in 0.. {
-                    cx.background_executor().timer(Duration::from_millis(350)).await;
-                    let alive = this.update(cx, |this, _| {
-                        let bots = this.bots.iter().map(|b| (b.id, b.name.clone(), b.busy())).collect();
-                        if let Some(t) = &mut this.tray {
-                            t.update(bots, tick);
-                        }
-                    });
-                    if alive.is_err() {
-                        break;
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            for tick in 0.. {
+                cx.background_executor().timer(Duration::from_millis(350)).await;
+                let alive = this.update(cx, |this, _| {
+                    let bots = this.bots.iter().map(|b| (b.id, b.name.clone(), b.busy(), b.unread)).collect();
+                    if let Some(t) = &mut this.tray {
+                        t.update(bots, tick);
                     }
+                });
+                if alive.is_err() {
+                    break;
                 }
-            })
-            .detach();
-        }
+            }
+        })
+        .detach();
         this
     }
 
@@ -619,6 +633,7 @@ impl Eggbot {
             codex_role: None,
             pending_role: None,
             context: (0, 0),
+            unread: false,
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -628,6 +643,7 @@ impl Eggbot {
 
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = i;
+        self.mark_read(cx);
         self.selects_stale = true;
         self.menu_open = false;
         self.confirm_delete = None;
@@ -636,6 +652,29 @@ impl Eggbot {
         self.scroll.scroll_to_bottom();
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
+    }
+
+    /// The selected bot has been seen.
+    fn mark_read(&mut self, cx: &mut Context<Self>) {
+        if let Some(b) = self.bots.get_mut(self.selected).filter(|b| b.unread) {
+            b.unread = false;
+            self.save();
+            cx.notify();
+        }
+    }
+
+    /// News from a bot: unread unless the user is looking at it, and a notification while eggbot is in the background.
+    fn alert(&mut self, id: usize, title: &str, body: &str) {
+        if self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id) {
+            return;
+        }
+        if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+            b.unread = true;
+        }
+        if !self.active {
+            let body: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+            notify::send(id, title, &body);
+        }
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -712,11 +751,12 @@ impl Eggbot {
         }
     }
 
-    /// Sends the finished reply to every bot it mentions as @Name.
-    fn hand_off(&mut self, from: usize, reply: String, hops: u32, cx: &mut Context<Self>) {
+    /// Sends the finished reply to every bot it mentions as @Name; false when it mentions nobody.
+    fn hand_off(&mut self, from: usize, reply: String, hops: u32, cx: &mut Context<Self>) -> bool {
         let names: Vec<(usize, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str())).collect();
         let targets = handoff::mentions(&reply, &names, from);
-        let Some(sender) = self.bots.iter().find(|b| b.id == from) else { return };
+        let handed = !targets.is_empty();
+        let Some(sender) = self.bots.iter().find(|b| b.id == from) else { return false };
         let (from_name, color, folder) = (sender.name.clone(), sender.color(), sender.folder.clone());
         let next = hops + 1;
         for to in targets {
@@ -726,12 +766,15 @@ impl Eggbot {
             target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false });
             let to_name = target.name.clone();
             if let Some(s) = self.bots.iter_mut().find(|b| b.id == from) {
-                s.msgs.push(Msg::Sent { to: to_name });
+                s.msgs.push(Msg::Sent { to: to_name.clone() });
             }
-            if !paused {
+            if paused {
+                self.alert(to, "Chain paused", &format!("{from_name} handed off to {to_name} after {} hops. Open eggbot to continue.", handoff::MAX_HOPS));
+            } else {
                 self.deliver(to, prompt, next, false, cx);
             }
         }
+        handed
     }
 
     /// Starts (or queues) every schedule that is due.
@@ -742,7 +785,7 @@ impl Eggbot {
             for s in b.schedules.iter_mut().filter(|s| s.due(now)) {
                 s.anchor = now.timestamp();
                 b.msgs.push(Msg::Scheduled { prompt: s.prompt.clone(), label: s.repeat.label() });
-                due.push((b.id, s.prompt.clone()));
+                due.push((b.id, format!("{}{QUIET}", s.prompt)));
             }
         }
         if due.is_empty() {
@@ -883,6 +926,7 @@ impl Eggbot {
                 bot.run = None;
                 bot.msgs.retain(|m| !matches!(m, Msg::Bot(s) if s.is_empty()));
                 let ok = !bot.stopped && error.is_none();
+                let failed = error.clone().filter(|_| !bot.stopped);
                 match (bot.stopped, error) {
                     (true, _) => bot.msgs.push(Msg::Error("Stopped.".into())),
                     (false, Some(e)) => bot.msgs.push(Msg::Error(e)),
@@ -892,6 +936,14 @@ impl Eggbot {
                 let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. } | Msg::Scheduled { .. })).map_or(0, |i| i + 1);
                 let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
                 let (reply, hops) = (reply.join("\n\n"), bot.hops);
+                // a scheduled run with nothing to say stays out of the way
+                let quiet = ok && bot.fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
+                if quiet {
+                    let tail = bot.msgs.split_off(start);
+                    bot.msgs.extend(tail.into_iter().filter(|m| !matches!(m, Msg::Bot(_))));
+                    bot.msgs.push(Msg::Divider("Nothing to report".into()));
+                }
+                let name = bot.name.clone();
                 let next = (!bot.queue.is_empty()).then(|| bot.queue.remove(0));
                 let refreshed = std::mem::take(&mut bot.refreshing);
                 if let Some(role) = bot.pending_role.take().filter(|_| ok) {
@@ -905,8 +957,12 @@ impl Eggbot {
                     }
                     bot.context.0 = 0;
                     bot.msgs.push(Msg::Divider("New session · notes kept".into()));
-                } else if ok {
-                    self.hand_off(id, reply, hops, cx);
+                }
+                let handed = ok && !refreshed && !quiet && self.hand_off(id, reply.clone(), hops, cx);
+                match failed {
+                    Some(e) => self.alert(id, &format!("{name} needs you"), &e),
+                    None if ok && !quiet && !handed => self.alert(id, &name, &reply),
+                    None => {}
                 }
                 if let Some((prompt, hops, fresh)) = next {
                     self.start_turn(id, prompt, hops, fresh, cx);

@@ -11,22 +11,23 @@ pub enum Action {
 
 pub struct Tray {
     icon: TrayIcon,
-    frames: [Icon; 3],
+    /// Still, wobble left, wobble right, still with an unread dot.
+    frames: [Icon; 4],
     frame: usize,
-    /// (id, name, busy) the menu was last built from; rebuilt only when it changes.
-    shown: Vec<(usize, String, bool)>,
+    /// (id, name, busy, unread) the menu was last built from; rebuilt only when it changes.
+    shown: Vec<(usize, String, bool, bool)>,
 }
 
 impl Tray {
-    pub fn new() -> Option<(Self, async_channel::Receiver<Action>)> {
-        let frames = [egg_icon(0.), egg_icon(-0.2), egg_icon(0.2)];
+    /// Menu clicks go to `tx`.
+    pub fn new(tx: async_channel::Sender<Action>) -> Option<Self> {
+        let frames = [egg_icon(0., false), egg_icon(-0.2, false), egg_icon(0.2, false), egg_icon(0., true)];
         let icon = TrayIconBuilder::new()
             .with_icon_templated(frames[0].clone())
             .with_tooltip("eggbot")
             .build()
             .map_err(|e| eprintln!("eggbot: no menu bar icon: {e}"))
             .ok()?;
-        let (tx, rx) = async_channel::unbounded();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let action = match e.id.0.as_str() {
                 "open" => Action::Open,
@@ -40,13 +41,17 @@ impl Tray {
         }));
         let mut tray = Self { icon, frames, frame: 0, shown: vec![] };
         tray.update(vec![], 0);
-        Some((tray, rx))
+        Some(tray)
     }
 
     /// Called on a timer: wobbles the egg while any bot works and refreshes the menu when needed.
-    pub fn update(&mut self, bots: Vec<(usize, String, bool)>, tick: usize) {
+    pub fn update(&mut self, bots: Vec<(usize, String, bool, bool)>, tick: usize) {
         let busy = bots.iter().any(|b| b.2);
-        let frame = if busy { 1 + tick % 2 } else { 0 };
+        let frame = match (busy, bots.iter().any(|b| b.3)) {
+            (true, _) => 1 + tick % 2,
+            (false, true) => 3,
+            _ => 0,
+        };
         if frame != self.frame {
             let _ = self.icon.set_icon_templated(Some(self.frames[frame].clone()));
             self.frame = frame;
@@ -57,8 +62,12 @@ impl Tray {
         let menu = Menu::new();
         let _ = menu.append(&MenuItem::with_id("open", "Open eggbot", true, None));
         let _ = menu.append(&PredefinedMenuItem::separator());
-        for (id, name, busy) in &bots {
-            let label = if *busy { format!("● {name} — working") } else { format!("○ {name}") };
+        for (id, name, busy, unread) in &bots {
+            let label = match (busy, unread) {
+                (true, _) => format!("● {name} — working"),
+                (false, true) => format!("○ {name} — new"),
+                _ => format!("○ {name}"),
+            };
             let _ = menu.append(&MenuItem::with_id(format!("bot:{id}"), label, true, None));
         }
         let _ = menu.append(&PredefinedMenuItem::separator());
@@ -68,8 +77,8 @@ impl Tray {
     }
 }
 
-/// A 36×36 (18pt @2x) template egg with two eye holes, tilted by `angle` radians around its base.
-fn egg_icon(angle: f32) -> Icon {
+/// A 36×36 (18pt @2x) template egg with two eye holes, tilted by `angle` radians around its base; `dot` adds an unread badge.
+fn egg_icon(angle: f32, dot: bool) -> Icon {
     const N: usize = 36;
     let (sin, cos) = angle.sin_cos();
     let inside = |x: f32, y: f32| {
@@ -81,7 +90,12 @@ fn egg_icon(angle: f32) -> Icon {
         let half_w = 11. * (1. - 0.25 * (-t).max(0.).powi(2)); // narrower top
         let shell = (ux / half_w).powi(2) + ((uy - cy) / half_h).powi(2) <= 1.;
         let eye = |ex: f32| (ux - ex).powi(2) + (uy - 21.).powi(2) <= 2.6f32.powi(2);
-        shell && !eye(-4.5) && !eye(4.5)
+        // the badge sits top right, with a clear ring cut out of the shell around it
+        let badge = (x - 30.).powi(2) + (y - 7.).powi(2);
+        if dot && badge <= 4.5f32.powi(2) {
+            return true;
+        }
+        shell && !eye(-4.5) && !eye(4.5) && !(dot && badge <= 6.5f32.powi(2))
     };
     let mut rgba = vec![0u8; N * N * 4];
     for py in 0..N {

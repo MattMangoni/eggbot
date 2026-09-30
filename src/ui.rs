@@ -182,7 +182,9 @@ impl Eggbot {
                         .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
                 )
                 .when(b.busy(), |d| d.child(Spinner::new().color(p.muted).xsmall()))
-                .when(!b.busy(), |d| d.child(trash))
+                // unread takes the trash's slot; selecting the bot clears it
+                .when(b.unread && !b.busy(), |d| d.child(div().w(px(22.)).flex_none().flex().justify_center().child(div().size(px(7.)).rounded_full().bg(p.ink))))
+                .when(!b.unread && !b.busy(), |d| d.child(trash))
         }).collect::<Vec<_>>();
 
         // one highlight that springs to the selected row

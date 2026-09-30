@@ -55,6 +55,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 | Appearance | View menu: Match System / Light / Dark, ⌘⇧D cycles, saved in state.json | Matteo chose the menu over a sidebar button |
 | App bundle | `scripts/bundle.sh` → `~/Applications/eggbot.app`, id `com.digitalmaze.eggbot`, ad-hoc signed, icon drawn by `scripts/icon.swift` | Needed for native notifications; no cargo-bundle |
+| Proactive messages | Notify on reply / scheduled run / chain end or pause / error; only when eggbot is in the background; unread dot + menu bar badge; scheduled runs may reply QUIET | Matteo chose all four triggers, bundle first, quiet runs, unread dot |
 
 ## Phases
 
