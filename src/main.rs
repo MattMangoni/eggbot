@@ -1,7 +1,9 @@
 mod claude;
 mod egg;
+mod sandbox;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egg::{Mood, egg};
@@ -106,6 +108,10 @@ struct Bot {
     id: usize,
     name: String,
     preset: usize,
+    #[serde(default)]
+    folder: Option<PathBuf>,
+    // renamed when bots moved into containers: host sessions cannot resume there
+    #[serde(rename = "sandbox_session")]
     session: Option<String>,
     msgs: Vec<Msg>,
     #[serde(skip, default = "hatched_long_ago")]
@@ -115,7 +121,9 @@ struct Bot {
     #[serde(skip)]
     pokes: u32,
     #[serde(skip)]
-    run: Option<claude::Handle>,
+    run: Option<Arc<claude::Handle>>,
+    #[serde(skip)]
+    status: Option<String>,
     #[serde(skip)]
     stopped: bool,
 }
@@ -167,6 +175,8 @@ struct Eggbot {
     selected: usize,
     next_id: usize,
     menu_open: bool,
+    /// Bot id whose trash icon was clicked once; a second click deletes.
+    confirm_delete: Option<usize>,
     usage: Option<(f32, f32)>,
     input: Entity<InputState>,
     scroll: ScrollHandle,
@@ -189,7 +199,7 @@ impl Eggbot {
         input.update(cx, |s, cx| s.focus(window, cx));
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, usage: None, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => (this.bots, this.next_id) = (s.bots, s.next_id),
             _ => {
@@ -230,12 +240,14 @@ impl Eggbot {
             id: self.next_id,
             name,
             preset,
+            folder: None,
             session: None,
             msgs: vec![],
             born: Instant::now() + delay,
             poked: None,
             pokes: 0,
             run: None,
+            status: None,
             stopped: false,
         });
         self.next_id += 1;
@@ -259,6 +271,7 @@ impl Eggbot {
         }
         self.selected = i;
         self.menu_open = false;
+        self.confirm_delete = None;
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -273,23 +286,27 @@ impl Eggbot {
         bot.msgs.push(Msg::User(text.clone()));
         bot.stopped = false;
         let id = bot.id;
-        let dir = data_dir().join("bots").join(id.to_string());
-        let role = format!("{}{STYLE}", bot.preset().role);
-        let started = std::fs::create_dir_all(&dir).and_then(|_| claude::run(&dir, &text, &role, bot.session.as_deref()));
-        match started {
-            Ok((handle, events)) => {
-                bot.run = Some(handle);
-                cx.spawn(async move |this, cx| {
-                    while let Ok(ev) = events.recv().await {
-                        if this.update(cx, |this, cx| this.apply(id, ev, cx)).is_err() {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-            }
-            Err(e) => bot.msgs.push(Msg::Error(format!("Could not start claude: {e}"))),
+        let scratch = data_dir().join("bots").join(id.to_string());
+        if let Err(e) = std::fs::create_dir_all(&scratch) {
+            eprintln!("eggbot: could not create {}: {e}", scratch.display());
         }
+        let turn = claude::Turn {
+            bot: id,
+            mount: bot.folder.clone().unwrap_or(scratch),
+            prompt: text,
+            role: format!("{}{STYLE}", bot.preset().role),
+            session: bot.session.clone(),
+        };
+        let (handle, events) = claude::run(turn);
+        bot.run = Some(handle);
+        cx.spawn(async move |this, cx| {
+            while let Ok(ev) = events.recv().await {
+                if this.update(cx, |this, cx| this.apply(id, ev, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         self.save();
         self.scroll.scroll_to_bottom();
         cx.notify();
@@ -300,7 +317,7 @@ impl Eggbot {
             && let Some(run) = &bot.run
         {
             bot.stopped = true;
-            let _ = run.lock().unwrap().kill();
+            run.stop();
             cx.notify();
         }
     }
@@ -313,6 +330,10 @@ impl Eggbot {
             return;
         }
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        bot.status = match ev {
+            Ev::Status(ref s) => Some(s.clone()),
+            _ => None,
+        };
         match ev {
             Ev::Session(s) if !s.is_empty() => bot.session = Some(s),
             Ev::TextStart => bot.msgs.push(Msg::Bot(String::new())),
@@ -342,12 +363,93 @@ impl Eggbot {
         cx.notify();
     }
 
+    /// Deletes the bot, its container and its scratch folder; never a mounted project folder.
+    fn delete(&mut self, id: usize, cx: &mut Context<Self>) {
+        let Some(i) = self.bots.iter().position(|b| b.id == id) else { return };
+        if let Some(run) = &self.bots[i].run {
+            run.stop();
+        }
+        self.bots.remove(i);
+        self.selected = self.selected.min(self.bots.len().saturating_sub(1));
+        self.confirm_delete = None;
+        self.save();
+        let scratch = data_dir().join("bots").join(id.to_string());
+        cx.background_executor()
+            .spawn(async move {
+                sandbox::remove(id);
+                let _ = std::fs::remove_dir_all(scratch);
+            })
+            .detach();
+        cx.notify();
+    }
+
+    fn pick_folder(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Mount".into()) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = picked.await
+                && let Some(path) = paths.pop()
+            {
+                this.update(cx, |this, cx| {
+                    if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
+                        b.folder = Some(path);
+                    }
+                    this.save();
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
+        let opening = cx.background_executor().spawn(async { sandbox::ready(&|_| {}).and_then(|_| sandbox::sign_in()) });
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = opening.await {
+                this.update(cx, |this, cx| {
+                    if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
+                        b.msgs.push(Msg::Error(format!("Could not open the sign-in: {e}")));
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let rows = self.bots.iter().enumerate().map(|(i, b)| {
             let active = i == self.selected;
+            let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
+            let trash = div()
+                .id(("trash", id))
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .py_1()
+                .rounded(px(8.))
+                .text_xs()
+                .cursor_pointer()
+                .when(confirming, |d| d.bg(p.amber).text_color(hex(0x2B2621)).px_2().child("Delete?"))
+                .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover("row", |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if this.confirm_delete == Some(id) {
+                        this.delete(id, cx);
+                    } else {
+                        this.confirm_delete = Some(id);
+                        cx.notify();
+                    }
+                }))
+                .when(!confirming, |d| d.child(Icon::new(IconName::Trash).size_4()));
             div()
                 .id(("bot", b.id))
+                .group("row")
                 .h(px(ROW_H))
                 .flex()
                 .items_center()
@@ -367,6 +469,7 @@ impl Eggbot {
                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(b.name.clone()))
                         .child(div().text_xs().text_color(p.muted).truncate().child(if b.busy() { "thinking…" } else { b.preset().blurb })),
                 )
+                .child(trash)
         });
 
         // one highlight card that springs to the selected row
@@ -508,7 +611,17 @@ impl Eggbot {
     fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let Some(bot) = self.bots.get(self.selected) else {
-            return div().flex_1().into_any_element();
+            return div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_4()
+                .child(egg("empty", hex(0xF6D28B), 88., Mood::Unborn))
+                .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("The nest is empty"))
+                .child(div().text_sm().text_color(p.muted).child("Hatch a bot to begin."))
+                .into_any_element();
         };
         let sel = self.selected;
         let color = hex(bot.preset().color);
@@ -551,9 +664,12 @@ impl Eggbot {
                             .child(if bot.busy() { "working" } else { "idle" }),
                     ),
             )
-            // ponytail: placeholder until Phase 3 mounts a real project folder
             .child(
                 div()
+                    .id("folder")
+                    .cursor_pointer()
+                    .hover(|d| d.border_color(p.muted).text_color(p.ink))
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx)))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -565,7 +681,10 @@ impl Eggbot {
                     .text_xs()
                     .text_color(p.muted)
                     .child(Icon::new(IconName::Folder).size_3())
-                    .child("No project folder"),
+                    .child(match &bot.folder {
+                        Some(f) => f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string()),
+                        None => "Choose project folder".into(),
+                    }),
             );
 
         let body = if bot.msgs.is_empty() {
@@ -675,6 +794,7 @@ impl Eggbot {
             .gap_3()
             .child(egg(format!("typing-{}", bot.id), hex(bot.preset().color), 24., Mood::Thinking))
             .child(div().h(px(24.)).flex().items_end().gap(px(5.)).pb_1().children((0..3).map(dot)))
+            .when_some(bot.status.clone(), |d, s| d.child(div().pb_1().text_xs().text_color(muted).child(s)))
             .with_animation("typing-in", Animation::new(Duration::from_millis(200)), |d, t| d.opacity(t))
     }
 
@@ -697,7 +817,31 @@ impl Eggbot {
                         ),
                     )
             }
-            Msg::Error(t) => div().ml(px(36.)).flex().items_center().gap_2().text_sm().text_color(p.amber).child(Icon::new(IconName::CircleAlert).size_4()).child(t.clone()),
+            Msg::Error(t) => div()
+                .ml(px(36.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .text_color(p.amber)
+                .child(Icon::new(IconName::CircleAlert).size_4())
+                .child(t.clone())
+                .when(t.contains("/login"), |d| {
+                    d.child(
+                        div()
+                            .id(("sign-in", i))
+                            .ml_2()
+                            .px_3()
+                            .py_1()
+                            .rounded_full()
+                            .bg(p.amber)
+                            .text_color(hex(0x2B2621))
+                            .cursor_pointer()
+                            .hover(|d| d.opacity(0.85))
+                            .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
+                            .child("Sign in to Claude"),
+                    )
+                }),
             Msg::Tool { verb, target, detail, open, .. } => {
                 let (id, open) = (bot.id, *open);
                 let detail = if detail.is_empty() { "running…".to_string() } else { detail.clone() };

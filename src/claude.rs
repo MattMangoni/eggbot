@@ -1,14 +1,18 @@
 //! Runs one turn of the official `claude` CLI and turns its stream-json output into events.
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::sandbox;
+
 #[derive(Debug, PartialEq)]
 pub enum Ev {
+    /// Sandbox progress before claude starts (waking Colima, building the image…).
+    Status(String),
     Session(String),
     TextStart,
     Text(String),
@@ -18,51 +22,85 @@ pub enum Ev {
     Done { error: Option<String> },
 }
 
-pub type Handle = Arc<Mutex<Child>>;
+/// A running turn; `stop` ends it inside the container too.
+pub struct Handle {
+    bot: usize,
+    child: Mutex<Option<Child>>,
+}
 
-/// Starts `claude -p` in `dir`; events arrive on the returned channel, which closes when the process ends.
-pub fn run(dir: &Path, prompt: &str, role: &str, session: Option<&str>) -> std::io::Result<(Handle, async_channel::Receiver<Ev>)> {
-    let mut cmd = Command::new("claude");
-    cmd.current_dir(dir)
-        .args(["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .args(["--append-system-prompt", role])
-        // clean bots: no user hooks/plugins/MCP connectors; allowlist of tools, no shell until containers exist
-        .args(["--setting-sources", "project,local", "--strict-mcp-config", "--permission-mode", "acceptEdits"])
-        .args(["--tools", "Read,Edit,Write,Glob,Grep,WebFetch,WebSearch"])
+impl Handle {
+    pub fn stop(self: &Arc<Self>) {
+        let this = self.clone();
+        // docker calls block; keep them off the UI thread
+        std::thread::spawn(move || {
+            sandbox::interrupt(this.bot);
+            if let Some(c) = this.child.lock().unwrap().as_mut() {
+                let _ = c.kill();
+            }
+        });
+    }
+}
+
+pub struct Turn {
+    pub bot: usize,
+    pub mount: PathBuf,
+    pub prompt: String,
+    pub role: String,
+    pub session: Option<String>,
+}
+
+/// Runs one `claude -p` turn in the bot's container; events arrive on the channel, which closes at the end.
+pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+    let handle = Arc::new(Handle { bot: t.bot, child: Mutex::new(None) });
+    let (tx, rx) = async_channel::unbounded();
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        let send = |ev| drop(tx.send_blocking(ev));
+        let error = match turn(&t, &h, &send) {
+            Ok(true) => return,
+            Ok(false) => "claude ended without a result".to_string(),
+            Err(e) => e,
+        };
+        send(Ev::Done { error: Some(error) });
+    });
+    (handle, rx)
+}
+
+/// Ok(true) when claude reported its own result (success or error).
+fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
+    let name = sandbox::ensure(t.bot, &t.mount, &|s| send(Ev::Status(s.to_string())))?;
+    let mut cmd = Command::new("docker");
+    cmd.args(["exec", &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+        .args(["--append-system-prompt", &t.role])
+        // clean bots with full power inside their own machine; no tools that reach outside it
+        .args(["--setting-sources", "project,local", "--strict-mcp-config", "--permission-mode", "bypassPermissions"])
+        .args(["--disallowedTools", "RemoteTrigger,CronCreate,CronDelete,ScheduleWakeup,PushNotification"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(s) = session {
+    if let Some(s) = &t.session {
         cmd.args(["--resume", s]);
     }
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.spawn().map_err(|e| format!("Could not run docker: {e}"))?;
     let stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
-    let handle = Arc::new(Mutex::new(child));
-    let (tx, rx) = async_channel::unbounded();
+    *h.child.lock().unwrap() = Some(child);
 
-    let waiter = handle.clone();
-    std::thread::spawn(move || {
-        let mut done = false;
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            for ev in parse(&line) {
-                done |= matches!(ev, Ev::Done { .. });
-                let _ = tx.send_blocking(ev);
-            }
+    let mut done = false;
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        for ev in parse(&line) {
+            done |= matches!(ev, Ev::Done { .. });
+            send(ev);
         }
-        let mut err = String::new();
-        let _ = stderr.read_to_string(&mut err);
-        let status = waiter.lock().unwrap().wait();
-        if !done {
-            let why = match status {
-                Ok(s) if s.success() => "claude ended without a result".to_string(),
-                Ok(s) => format!("claude stopped ({s}). {}", err.trim()),
-                Err(e) => e.to_string(),
-            };
-            let _ = tx.send_blocking(Ev::Done { error: Some(why) });
-        }
-    });
-    Ok((handle, rx))
+    }
+    let mut err = String::new();
+    let _ = stderr.read_to_string(&mut err);
+    let status = h.child.lock().unwrap().take().map(|mut c| c.wait());
+    match status {
+        _ if done => Ok(true),
+        Some(Ok(s)) if !s.success() => Err(format!("claude stopped ({s}). {}", err.trim())),
+        _ => Ok(false),
+    }
 }
 
 pub fn parse(line: &str) -> Vec<Ev> {

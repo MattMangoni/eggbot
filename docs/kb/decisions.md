@@ -21,12 +21,18 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Host permissions | Read + edit only, no shell | Shell opens inside containers (Phase 3) |
 | Usage meter | 5h / 7d bars from `rate_limit_event`, amber at 80% | |
 | Memory | Each bot resumes its own Claude session; history in `state.json` | |
+| Colima VM | 4 CPU / 8 GB (`colima start --cpu 4 --memory 8`) | Was 2 CPU / 2 GB |
+| Container powers | bypassPermissions, shell, network; no tools that reach outside (RemoteTrigger, Cron…) | Container is the sandbox |
+| Container lifetime | One long-lived container per bot, removed on bot delete | |
+| Project folder | Header chip opens folder picker; mounted at /work; bots may share a folder | |
+| Image | Slim, no build-essential (852 MB); bots `sudo apt-get install` extras | |
+| Delete bot | Hover trash, click twice; removes bot, container, scratch folder, never a project folder | |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
 
 1. Shell and feel — done
-2. Real CLI on host, streaming, persistence — built, awaiting review
-3. Containers
+2. Real CLI on host, streaming, persistence — done
+3. Containers — done (folder picker, delete, stop confirmed by Matteo)
 4. Handoff
 5. Menu bar + schedules

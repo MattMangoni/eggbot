@@ -17,7 +17,9 @@ Observed 2026-09-30 with Claude Code 2.1.286. Raw sample: run
 
 ## What eggbot passes (see `src/claude.rs`)
 
-`--setting-sources project,local --strict-mcp-config --permission-mode acceptEdits --tools Read,Edit,Write,Glob,Grep,WebFetch,WebSearch`, plus `--append-system-prompt <role>` and `--resume <session>`, cwd = the bot's folder.
+Inside the container: `docker exec eggbot-<id> claude -p … --setting-sources project,local --strict-mcp-config --permission-mode bypassPermissions --disallowedTools RemoteTrigger,CronCreate,CronDelete,ScheduleWakeup,PushNotification`, plus `--append-system-prompt <role>` and `--resume <session>`.
+
+(Phase 2 on the host used `--permission-mode acceptEdits --tools Read,Edit,Write,Glob,Grep,WebFetch,WebSearch`.)
 
 Traps found:
 - `--setting-sources` alone does NOT drop claude.ai connectors (Google Drive, Slack…) — they leak in as MCP tools. `--strict-mcp-config` removes them.

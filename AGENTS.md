@@ -20,8 +20,10 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 
 - `src/main.rs` — app state, window, sidebar, chat, composer.
 - `src/claude.rs` — runs one `claude -p` turn, parses stream-json into events (`cargo test` covers the parser).
+- `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
+- `docker/bot.Dockerfile` — the bot machine image.
 - `src/egg.rs` — vector egg avatar and its animations (hatch, idle, thinking).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`.
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`.
 
 ## Hard rules
 
