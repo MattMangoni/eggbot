@@ -10,7 +10,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Always-on | Runs when window closes (menu bar), scheduled tasks, persistent memory | Proactive messages deferred |
 | Teamwork | Independent bots + automatic handoff: `@Name` anywhere in a reply sends the whole reply to that bot | Decided 2026-09-30; no lead/dispatcher bot |
 | Workspace | Host project folder mounted into the bot container | |
-| Look | "Warm egg": cream bg, charcoal ink, amber accent, animated egg avatars | Light theme only so far |
+| Look | Serious, ChatGPT/T3 Code style: monochrome neutral grays, native vibrancy sidebar (resizable 200–420 px, width saved), top bar breadcrumb, replies without bubbles | Replaced "warm egg" on 2026-10-01 |
 | Activity view | Chat + compact, expandable tool log | |
 | Phase 2 order | CLIs on host first, then move into containers | Only the command prefix changes |
 | Claude auth in containers | `claude /login` once inside a container; credentials live in a shared Docker volume; eggbot never touches the token | See `auth.md` |
@@ -47,6 +47,11 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Schedule sessions | Fresh session each run | |
 | Handoff sessions | Main session | |
 | Role updates | Must reach existing sessions for both providers (Codex: `<eggbot-context>` blocks; Claude: `--system-prompt-snapshot off`) | Matteo: "same behaviour should apply to Claude" |
+| Eggs | Small and quiet: 16 px in sidebar, 14 px in the breadcrumb, 32 px in the empty state; wobble only while working; no hatch/poke/blush | |
+| Model/effort UI (v2) | Combined provider+model dropdown and effort dropdown in the composer toolbar; editor keeps name, role, egg color | Supersedes the editor dropdowns |
+| Shortcuts | ⌘N new bot, ⌘K focus input, ⌘1…9 select bot, ⌃Tab / ⌃⇧Tab next/previous, Esc stop (or close the new-bot menu), ⌘W hide, ⌘Q quit | |
+| Composer | Multi-line (Enter sends, Shift+Enter newline, up to 8 lines) | |
+| Working state | Spinner + "Thinking…" on the sidebar row | Matteo chose sidebar over top bar |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
@@ -58,4 +63,5 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 5. Menu bar (5a) + schedules (5b) — done
 6. Bot editor — done
 7. Codex provider (parity) — done
-8. Context management — built: notes file, Fresh start, context meter, fresh schedule sessions, role updates for both providers
+8. Context management — done
+9. Serious UI (ChatGPT / T3 Code style) — built

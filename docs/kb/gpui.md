@@ -78,3 +78,16 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - `component::select::{Select, SelectState, SelectEvent, SelectItem}`. Custom item = struct implementing `SelectItem` (`type Value`, `title()`, `value()`); see `Choice` in `src/main.rs`.
 - `SelectState::new(Vec<Item>, None, window, cx)`; refill with `set_items(items, window, cx)` + `set_selected_value(&v, window, cx)` (both need `window`, so eggbot refills in `render` when `selects_stale`).
 - Listen with `cx.subscribe_in(&state, window, |this, _, ev: &SelectEvent<Vec<Item>>, _, cx| …)`; `SelectEvent::Confirm(Some(value))`.
+
+## Traps (2026-10-01)
+
+- Setting `.hover(..)` twice on one element panics: "hover style already set" (div.rs:843). Helpers that set hover (`button()` in `src/ui.rs`) must not get a second `.hover`; use a separate helper (`primary()`).
+- A lazy `.map(..)` iterator of children that captures `cx` must be `.collect()`ed before `cx` is used again in the same builder chain.
+- gpui-component's window root paints `theme.background` over the whole window. For a see-through window set `Theme.background = transparent_black()` and paint the opaque areas yourself.
+- `WindowBackgroundAppearance::Blurred` did nothing on macOS 27. Use `Transparent` plus a native `NSVisualEffectView` (material `Sidebar`, blending `BehindWindow`) inserted below GPUI's NSView (`add_vibrancy` in `src/main.rs`). Get the NSView via `raw_window_handle::HasWindowHandle::window_handle(window)` — call it as a trait function, because GPUI's own `Window::window_handle()` shadows it.
+- `Select` fills its parent; wrap it in a fixed-width `div` to size it (`.w()` on the Select does not reach the trigger).
+- Test clicks: `scratchpad/click X Y` (Swift, CGEvent) works on GPUI views; System Events clicks do not.
+- gpui-component binds ⌘[ / ⌘] (outdent/indent) inside text fields, and context bindings beat global ones: don't use them for app shortcuts. eggbot uses ⌘1…9 and ⌃Tab / ⌃⇧Tab.
+- Parameterized actions: `#[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)] #[action(namespace = …)]` needs `schemars` as a direct dependency.
+- Multi-line composer: `TextareaState::new(..).submit_on_enter(true)` + `set_auto_grow(1, 8, cx)` → Enter emits `PressEnter`, Shift+Enter inserts a newline.
+- Soft shadows: pass a `Vec<BoxShadow>` to `.shadow(..)` (hairline + wide faint blur); the stock `shadow_sm/md` look harsh on white.

@@ -18,7 +18,8 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 
 ## Layout
 
-- `src/main.rs` — app state, window, sidebar, chat, composer.
+- `src/main.rs` — app state and behaviour (turns, handoffs, schedules, sessions), window setup.
+- `src/ui.rs` — everything drawn: sidebar, top bar, chat, composer, panels.
 - `src/claude.rs` — shared agent types (`Provider`, `Ev`, `Turn`, `Handle`, `Meter`) and the `claude -p` runner + stream-json parser (tested).
 - `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
@@ -26,7 +27,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/tray.rs` — menu bar egg icon and menu.
 - `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
-- `src/egg.rs` — vector egg avatar and its animations (hatch, idle, thinking).
+- `src/egg.rs` — small vector egg avatar (still, or wobbling while working).
 - `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`.
 
 ## Hard rules

@@ -5,23 +5,27 @@ mod handoff;
 mod sandbox;
 mod schedule;
 mod tray;
+mod ui;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use claude::{Meter, Provider};
-use egg::{Mood, egg};
-use gpui_kit::assets::{Assets, IconName};
-use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
-use gpui_kit::component::text::TextView;
-use gpui_kit::component::{Icon, Theme};
-use gpui_kit::prelude::FluentBuilder as _;
+use egg::Mood;
+use gpui_kit::assets::Assets;
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn]);
+
+/// ⌘1…⌘9 selects the bot at that position.
+#[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
+#[action(namespace = eggbot)]
+struct SelectBot(usize);
 
 // the default bundle has only the component icons; add the extra ones we use
 gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil]);
@@ -52,22 +56,50 @@ fn hex(c: u32) -> Hsla {
 #[derive(Clone, Copy)]
 struct Palette {
     bg: Hsla,
+    /// Translucent: the window behind it is blurred (vibrancy).
     side: Hsla,
     card: Hsla,
     ink: Hsla,
     muted: Hsla,
     line: Hsla,
-    amber: Hsla,
+    hover: Hsla,
+    bubble: Hsla,
     ok: Hsla,
+    warn: Hsla,
+    err: Hsla,
 }
 
 impl Palette {
     fn light() -> Self {
-        Self { bg: hex(0xFBF7F0), side: hex(0xF3ECDF), card: hex(0xFFFDF9), ink: hex(0x2B2621), muted: hex(0x8C8276), line: hex(0xE9E0D2), amber: hex(0xF0A43A), ok: hex(0x6DB36A) }
+        Self {
+            bg: hex(0xFFFFFF),
+            side: hsla(0., 0., 1., 0.25),
+            card: hex(0xFFFFFF),
+            ink: hex(0x0D0D0D),
+            muted: hex(0x8F8F8F),
+            line: hex(0xE5E5E5),
+            hover: hsla(0., 0., 0., 0.05),
+            bubble: hex(0xF4F4F4),
+            ok: hex(0x16A34A),
+            warn: hex(0xD97706),
+            err: hex(0xDC2626),
+        }
     }
 
     fn dark() -> Self {
-        Self { bg: hex(0x1F1B18), side: hex(0x181512), card: hex(0x2A2521), ink: hex(0xF2EADC), muted: hex(0x9A8F82), line: hex(0x3A332D), amber: hex(0xF0A43A), ok: hex(0x7CC279) }
+        Self {
+            bg: hex(0x0F0F0F),
+            side: hsla(0., 0., 0.05, 0.25),
+            card: hex(0x171717),
+            ink: hex(0xECECEC),
+            muted: hex(0x8F8F8F),
+            line: hex(0x2A2A2A),
+            hover: hsla(0., 0., 1., 0.06),
+            bubble: hex(0x1F1F1F),
+            ok: hex(0x4ADE80),
+            warn: hex(0xFBBF24),
+            err: hex(0xF87171),
+        }
     }
 
     /// Follows the macOS appearance and pushes our colors into gpui-component.
@@ -76,17 +108,22 @@ impl Palette {
         let p = if Theme::global(cx).is_dark() { Self::dark() } else { Self::light() };
         // separate update: the mode switch above reloads the stock colors
         Theme::update(cx, |t| {
-            t.background = p.bg;
+            // gpui-component's root paints this over the whole window; clear it so the sidebar blur shows
+            t.background = transparent_black();
             t.foreground = p.ink;
             t.border = p.line;
             t.input = p.line;
-            t.primary = p.amber;
-            t.ring = p.amber;
+            t.primary = p.ink;
+            t.primary_foreground = p.bg;
+            t.ring = p.muted;
             t.caret = p.ink;
-            t.selection = p.amber.opacity(0.3);
-            t.muted = p.side;
+            t.selection = p.muted.opacity(0.3);
+            t.muted = p.bubble;
             t.muted_foreground = p.muted;
-            t.accent = p.side;
+            t.accent = p.hover;
+            t.popover = p.card;
+            t.list_hover = p.hover;
+            t.list_active = p.hover;
         });
         p
     }
@@ -146,8 +183,6 @@ impl SelectItem for Choice {
 const SHELLS: [u32; 8] = [0xF5C6A5, 0xC6DDB8, 0xD6CAF0, 0xF3DF9C, 0xB9D8EA, 0xF2B8C6, 0xCFE3D8, 0xE3D2B9];
 const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
-const ROW_H: f32 = 60.;
-const ROW_GAP: f32 = 4.;
 
 #[derive(Serialize, Deserialize)]
 enum Msg {
@@ -193,12 +228,6 @@ struct Bot {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
-    #[serde(skip, default = "hatched_long_ago")]
-    born: Instant,
-    #[serde(skip)]
-    poked: Option<Instant>,
-    #[serde(skip)]
-    pokes: u32,
     #[serde(skip)]
     run: Option<Arc<claude::Handle>>,
     #[serde(skip)]
@@ -228,10 +257,6 @@ struct Bot {
     context: (u64, u64),
 }
 
-fn hatched_long_ago() -> Instant {
-    Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now)
-}
-
 impl Bot {
     fn preset(&self) -> &'static Preset {
         &PRESETS[self.preset.min(PRESETS.len() - 1)]
@@ -258,14 +283,7 @@ impl Bot {
     }
 
     fn mood(&self) -> Mood {
-        let now = Instant::now();
-        match now.checked_duration_since(self.born) {
-            None => Mood::Unborn,
-            Some(a) if a < egg::HATCH => Mood::Hatching,
-            _ if self.busy() => Mood::Thinking,
-            _ if self.poked.is_some_and(|t| now - t < egg::BOING) => Mood::Boing(self.pokes),
-            _ => Mood::Idle,
-        }
+        if self.busy() { Mood::Thinking } else { Mood::Still }
     }
 
     /// True while the bot works but is not writing text (thinking or running a tool).
@@ -286,6 +304,12 @@ struct Saved {
     /// Last plan usage per provider; saved because it only arrives with a turn or an account query.
     #[serde(default)]
     meters: Vec<Meter>,
+    #[serde(default = "default_sidebar")]
+    sidebar_w: f32,
+}
+
+fn default_sidebar() -> f32 {
+    260.
 }
 
 struct Eggbot {
@@ -302,7 +326,7 @@ struct Eggbot {
     /// None = idle; Some(None) = asking now; Some(Some(e)) = the last question failed with `e`.
     codex_query: Option<Option<String>>,
     tray: Option<tray::Tray>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     sched_open: bool,
     /// 0 daily, 1 weekdays, 2 every N hours, 3 every N minutes
     sched_kind: usize,
@@ -317,12 +341,20 @@ struct Eggbot {
     effort_select: Entity<SelectState<Vec<Choice>>>,
     /// Dropdown options need refilling (bot, provider or Codex model list changed); done in render.
     selects_stale: bool,
+    sidebar_w: f32,
+    /// Dragging the sidebar's edge.
+    resizing: bool,
     scroll: ScrollHandle,
 }
 
 impl Eggbot {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Message…"));
+        // Enter sends, Shift+Enter adds a line; grows up to 8 lines
+        let input = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx).placeholder("Message…").submit_on_enter(true);
+            input.set_auto_grow(1, 8, cx);
+            input
+        });
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { shift: false, .. } = ev {
                 this.send(window, cx);
@@ -346,15 +378,28 @@ impl Eggbot {
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
-            let SelectEvent::Confirm(Some(model)) = ev else { return };
-            if let Some(b) = this.bots.get_mut(this.selected) {
-                // effort levels differ per model; fall back to the default level
-                b.model = model.clone();
-                b.effort = None;
-                this.selects_stale = true;
-                this.save();
-                cx.notify();
+            // values look like "claude", "claude:opus", "codex", "codex:<model id>"
+            let SelectEvent::Confirm(Some(Some(value))) = ev else { return };
+            let (provider, model) = match value.split_once(':') {
+                Some((p, m)) => (p, Some(m.to_string())),
+                None => (value.as_str(), None),
+            };
+            let provider = if provider == "codex" { Provider::Codex } else { Provider::Claude };
+            let Some(b) = this.bots.get_mut(this.selected) else { return };
+            if b.provider != provider {
+                b.provider = provider;
+                // the meter tracks the provider's session; it refills on the next turn
+                b.context = (0, 0);
             }
+            // effort levels differ per model; fall back to the default level
+            b.model = model;
+            b.effort = None;
+            if provider == Provider::Codex && this.codex_models.is_empty() {
+                this.refresh_codex(1, cx);
+            }
+            this.selects_stale = true;
+            this.save();
+            cx.notify();
         })
         .detach();
         cx.subscribe_in(&effort_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
@@ -394,15 +439,15 @@ impl Eggbot {
         .detach();
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), resizing: false, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id, this.meters) = (s.bots, s.next_id, s.meters);
+                (this.bots, this.next_id, this.meters, this.sidebar_w) = (s.bots, s.next_id, s.meters, s.sidebar_w);
                 this.scroll.scroll_to_bottom();
             }
             _ => {
                 for i in 0..3 {
-                    this.hatch(i, Duration::from_millis(300 + 350 * i as u64), cx);
+                    this.hatch(i);
                 }
                 this.selected = 0;
             }
@@ -488,7 +533,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -497,16 +542,7 @@ impl Eggbot {
         }
     }
 
-    /// Repaint after `delay`, so time-based moods (hatch, boing) can end.
-    fn refresh_after(delay: Duration, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(delay).await;
-            this.update(cx, |_, cx| cx.notify()).ok();
-        })
-        .detach();
-    }
-
-    fn hatch(&mut self, preset: usize, delay: Duration, cx: &mut Context<Self>) {
+    fn hatch(&mut self, preset: usize) {
         let base = PRESETS[preset].name;
         let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
         let name = (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap();
@@ -524,9 +560,6 @@ impl Eggbot {
             color: None,
             model: None,
             effort: None,
-            born: Instant::now() + delay,
-            poked: None,
-            pokes: 0,
             run: None,
             status: None,
             stopped: false,
@@ -540,24 +573,13 @@ impl Eggbot {
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
+        self.selects_stale = true;
         self.save();
-        Self::refresh_after(delay, cx);
-        Self::refresh_after(delay + egg::HATCH, cx);
-    }
-
-    fn poke(&mut self, i: usize, cx: &mut Context<Self>) {
-        if let Some(b) = self.bots.get_mut(i) {
-            b.pokes += 1;
-            b.poked = Some(Instant::now());
-            Self::refresh_after(egg::BOING, cx);
-        }
     }
 
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if i != self.selected {
-            self.poke(i, cx);
-        }
         self.selected = i;
+        self.selects_stale = true;
         self.menu_open = false;
         self.confirm_delete = None;
         self.edit_open = false;
@@ -1016,984 +1038,23 @@ impl Eggbot {
         })
         .detach();
     }
-
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.p;
-        let rows = self.bots.iter().enumerate().map(|(i, b)| {
-            let active = i == self.selected;
-            let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
-            let trash = div()
-                .id(("trash", id))
-                .flex()
-                .items_center()
-                .gap_1()
-                .px_1()
-                .py_1()
-                .rounded(px(8.))
-                .text_xs()
-                .cursor_pointer()
-                .when(confirming, |d| d.bg(p.amber).text_color(hex(0x2B2621)).px_2().child("Delete?"))
-                .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover("row", |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    if this.confirm_delete == Some(id) {
-                        this.delete(id, cx);
-                    } else {
-                        this.confirm_delete = Some(id);
-                        cx.notify();
-                    }
-                }))
-                .when(!confirming, |d| d.child(Icon::new(IconName::Trash).size_4()));
-            div()
-                .id(("bot", b.id))
-                .group("row")
-                .h(px(ROW_H))
-                .flex()
-                .items_center()
-                .gap_3()
-                .px_3()
-                .rounded(px(14.))
-                .cursor_pointer()
-                .when(!active, |d| d.hover(|d| d.bg(p.card.opacity(0.5))))
-                .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
-                .child(egg(format!("side-{}", b.id), hex(b.color()), 30., b.mood()))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .overflow_hidden()
-                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(b.name.clone()))
-                        .child(div().text_xs().text_color(p.muted).truncate().child(match (b.busy(), b.queue.len()) {
-                            (true, 0) => "thinking…".to_string(),
-                            (true, n) => format!("thinking… · {n} queued"),
-                            _ => b.blurb(),
-                        })),
-                )
-                .child(trash)
-        });
-
-        // one highlight card that springs to the selected row
-        let highlight = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .h(px(ROW_H))
-            .rounded(px(14.))
-            .bg(p.card)
-            .shadow_sm()
-            .with_spring(
-                "selection",
-                SpringAnimation::new(SpringConfig::new(320., 26., 1.)).to(px(self.selected as f32 * (ROW_H + ROW_GAP))).with_epsilon(0.25),
-                |d, top| d.top(top),
-            );
-
-        div()
-            .w(px(248.))
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(p.side)
-            .border_r_1()
-            .border_color(p.line)
-            .pt(px(44.))
-            .px_3()
-            .pb_3()
-            .child(
-                div()
-                    .px_3()
-                    .pb_4()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(egg("logo", hex(0xF6D28B), 16., Mood::Still))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("eggbot")),
-            )
-            .child(
-                div()
-                    .id("bots")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(!self.bots.is_empty(), |d| d.child(highlight)).children(rows)),
-            )
-            .when(self.menu_open, |d| d.child(self.hatch_menu(cx)))
-            .child(
-                div()
-                    .id("hatch")
-                    .mt_2()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap_2()
-                    .py_2()
-                    .rounded(px(14.))
-                    .border_1()
-                    .border_dashed()
-                    .border_color(p.muted.opacity(0.5))
-                    .text_sm()
-                    .text_color(p.muted)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(p.card.opacity(0.6)).text_color(p.ink))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.menu_open = !this.menu_open;
-                        cx.notify();
-                    }))
-                    .child(Icon::new(IconName::Plus).size_4())
-                    .child("Hatch a bot"),
-            )
-            .children(self.meters.iter().map(|m| self.usage_meter(m)))
-    }
-
-    fn usage_meter(&self, meter: &Meter) -> impl IntoElement {
-        let p = self.p;
-        let now = chrono::Local::now().timestamp();
-        let at = chrono::DateTime::from_timestamp(meter.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
-        let bars = meter.windows.iter().map(|w| {
-            // a window whose reset time has passed is back to zero
-            let v = if w.reset > 0 && now >= w.reset { 0. } else { w.used.clamp(0., 1.) };
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(p.muted)
-                .child(div().w(px(34.)).child(w.label.clone()))
-                .child(
-                    div().flex_1().h(px(4.)).rounded_full().bg(p.line).child(
-                        div().h_full().rounded_full().w(relative(v)).bg(if v >= 0.8 { p.amber } else { p.muted.opacity(0.6) }),
-                    ),
-                )
-                .child(div().w(px(30.)).text_right().child(format!("{:.0}%", v * 100.)))
-        });
-        div()
-            .mt_3()
-            .px_1()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_xs().text_color(p.muted.opacity(0.7)).child(format!("{} · updated {at}", if meter.provider == Provider::Codex { "Codex" } else { "Claude" })))
-            .children(bars)
-    }
-
-    fn hatch_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.p;
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_1()
-            .mt_2()
-            .rounded(px(16.))
-            .bg(p.card)
-            .shadow_lg()
-            .border_1()
-            .border_color(p.line)
-            .children(PRESETS.iter().enumerate().map(|(i, preset)| {
-                div()
-                    .id(("preset", i))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_2()
-                    .py_2()
-                    .rounded(px(12.))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(p.side))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.menu_open = false;
-                        this.hatch(i, Duration::ZERO, cx);
-                        if PRESETS[i].name == "Custom" {
-                            this.open_editor(window, cx);
-                        } else {
-                            this.edit_open = false;
-                            this.input.update(cx, |s, cx| s.focus(window, cx));
-                        }
-                        cx.notify();
-                    }))
-                    .child(egg(format!("preset-{i}"), hex(preset.color), 20., Mood::Unborn))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(div().text_sm().child(preset.name))
-                            .child(div().text_xs().text_color(p.muted).child(preset.blurb)),
-                    )
-            }))
-            .with_animation("menu-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), |d, t| {
-                d.opacity(t).mt(px(8. + 6. * (1. - t)))
-            })
-    }
-
-    fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.p;
-        let Some(bot) = self.bots.get(self.selected) else {
-            return div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .child(egg("empty", hex(0xF6D28B), 88., Mood::Unborn))
-                .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("The nest is empty"))
-                .child(div().text_sm().text_color(p.muted).child("Hatch a bot to begin."))
-                .into_any_element();
-        };
-        let sel = self.selected;
-        let color = hex(bot.color());
-
-        let header = div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_6()
-            .pt(px(30.))
-            .pb_3()
-            .border_b_1()
-            .border_color(p.line)
-            .child(
-                div()
-                    .id("head-egg")
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.poke(sel, cx);
-                        cx.notify();
-                    }))
-                    .child(egg(format!("head-{}", bot.id), color, 34., bot.mood())),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .child(
-                        div()
-                            .id("bot-name")
-                            .group("name")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.edit_open {
-                                    this.edit_open = false;
-                                    cx.notify();
-                                } else {
-                                    this.open_editor(window, cx);
-                                }
-                            }))
-                            .child(bot.name.clone())
-                            .child(div().text_color(p.muted).opacity(if self.edit_open { 1. } else { 0. }).group_hover("name", |s| s.opacity(1.)).child(Icon::new(IconName::Pencil).size_3())),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(p.muted)
-                            .child([Some(bot.provider.label().to_string()), bot.model.clone(), bot.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · "))
-                            .child("·")
-                            .child(div().size(px(6.)).rounded_full().bg(if bot.busy() { p.amber } else { p.ok }))
-                            .child(if bot.busy() { "working" } else { "idle" }),
-                    ),
-            )
-            .when(bot.context.1 > 0, |d| {
-                let used = (bot.context.0 as f32 / bot.context.1 as f32).clamp(0., 1.);
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(p.muted)
-                        .child("context")
-                        .child(div().w(px(48.)).h(px(4.)).rounded_full().bg(p.line).child(div().h_full().rounded_full().w(relative(used)).bg(if used >= 0.7 { p.amber } else { p.muted.opacity(0.6) })))
-                        .child(format!("{:.0}%", used * 100.)),
-                )
-            })
-            .child(
-                div()
-                    .id("fresh")
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_3()
-                    .py_1()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(p.line)
-                    .text_xs()
-                    .text_color(p.muted)
-                    .when(!bot.busy(), |d| d.cursor_pointer().hover(|d| d.border_color(p.muted).text_color(p.ink)))
-                    .when(bot.busy(), |d| d.opacity(0.5))
-                    .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
-                    .child(Icon::new(IconName::RefreshCw).size_3())
-                    .child("Fresh start"),
-            )
-            .child(
-                div()
-                    .id("clock")
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_3()
-                    .py_1()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(if self.sched_open { p.amber } else { p.line })
-                    .text_xs()
-                    .text_color(p.muted)
-                    .cursor_pointer()
-                    .hover(|d| d.border_color(p.muted).text_color(p.ink))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.sched_open = !this.sched_open;
-                        this.sched_error = None;
-                        this.edit_open = false;
-                        if this.sched_open {
-                            this.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
-                        }
-                        cx.notify();
-                    }))
-                    .child(Icon::new(IconName::Clock).size_3())
-                    .when(!bot.schedules.is_empty(), |d| d.child(bot.schedules.len().to_string())),
-            )
-            .child(
-                div()
-                    .id("folder")
-                    .cursor_pointer()
-                    .hover(|d| d.border_color(p.muted).text_color(p.ink))
-                    .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx)))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(p.line)
-                    .text_xs()
-                    .text_color(p.muted)
-                    .child(Icon::new(IconName::Folder).size_3())
-                    .child(match &bot.folder {
-                        Some(f) => f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string()),
-                        None => "Choose project folder".into(),
-                    }),
-            );
-
-        let body = if bot.msgs.is_empty() {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .child(
-                    div()
-                        .id("hero-egg")
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.poke(sel, cx);
-                            cx.notify();
-                        }))
-                        .child(egg(format!("hero-{}", bot.id), color, 88., bot.mood())),
-                )
-                .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(format!("Say hi to {}", bot.name)))
-                .child(div().text_sm().text_color(p.muted).child(bot.blurb()))
-                .into_any_element()
-        } else {
-            let msgs = bot.msgs.iter().enumerate().map(|(i, m)| self.message(bot, i, m, cx));
-            div()
-                .id(("msgs", bot.id))
-                .flex_1()
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .px_6()
-                        .py_5()
-                        .max_w(px(760.))
-                        .mx_auto()
-                        .w_full()
-                        .children(msgs)
-                        .when(bot.waiting(), |d| d.child(self.typing(bot))),
-                )
-                .into_any_element()
-        };
-
-        let busy = bot.busy();
-        let composer = div().px_6().pb_5().child(
-            div()
-                .max_w(px(760.))
-                .mx_auto()
-                .flex()
-                .items_center()
-                .gap_2()
-                .pl_4()
-                .pr_2()
-                .py_2()
-                .rounded(px(20.))
-                .bg(p.card)
-                .border_1()
-                .border_color(p.line)
-                .shadow_md()
-                .child(div().flex_1().child(Input::new(&self.input).appearance(false)))
-                .child(
-                    div()
-                        .id("send")
-                        .size(px(34.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(if busy { p.ink } else { p.amber })
-                        .text_color(if busy { p.bg } else { hex(0x2B2621) })
-                        .cursor_pointer()
-                        .hover(|d| d.opacity(0.85))
-                        .on_click(cx.listener(move |this, _, window, cx| if busy { this.stop(cx) } else { this.send(window, cx) }))
-                        .child(if busy { div().size(px(10.)).rounded(px(2.)).bg(p.bg).into_any_element() } else { Icon::new(IconName::ArrowUp).size_4().into_any_element() }),
-                ),
-        );
-
-        // new id per bot, so switching bots replays the fade
-        let content = div().flex_1().flex().flex_col().min_h_0().child(header).when(self.sched_open, |d| d.child(self.schedules(bot, cx))).when(self.edit_open, |d| d.child(self.editor(bot, cx))).child(body).with_animation(
-            ElementId::Name(format!("chat-{}", bot.id).into()),
-            Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
-            |d, t| d.opacity(t).mt(px(6. * (1. - t))),
-        );
-
-        div().flex_1().flex().flex_col().h_full().child(content).child(composer).into_any_element()
-    }
-
-    /// Fills the model and effort dropdowns for the selected bot (options depend on provider and model).
-    fn sync_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.selects_stale = false;
-        let Some(bot) = self.bots.get(self.selected) else { return };
-        let choice = |value: Option<String>, label: String| Choice { value, label: label.into() };
-        let models: Vec<Choice> = match bot.provider {
-            Provider::Claude => MODELS.iter().map(|(a, l)| choice(a.map(str::to_string), l.to_string())).collect(),
-            Provider::Codex => std::iter::once(choice(None, "Default".into())).chain(self.codex_models.iter().map(|m| choice(Some(m.id.clone()), m.name.clone()))).collect(),
-        };
-        let levels: Vec<String> = match bot.provider {
-            Provider::Claude => ["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec(),
-            Provider::Codex => self.codex_models.iter().find(|m| bot.model.as_ref().map_or(m.default, |id| *id == m.id)).map(|m| m.efforts.clone()).unwrap_or_default(),
-        };
-        let efforts: Vec<Choice> = std::iter::once(choice(None, "Default".into())).chain(levels.into_iter().map(|l| choice(Some(l.clone()), l))).collect();
-        let (model, effort) = (bot.model.clone(), bot.effort.clone());
-        self.model_select.update(cx, |s, cx| {
-            s.set_items(models, window, cx);
-            s.set_selected_value(&model, window, cx);
-        });
-        self.effort_select.update(cx, |s, cx| {
-            s.set_items(efforts, window, cx);
-            s.set_selected_value(&effort, window, cx);
-        });
-    }
-
-    /// The bot editor: name, role, egg color, model. Color and model apply at once; name and role on Save.
-    fn editor(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.p;
-        let current = bot.color();
-        let swatches = SHELLS.iter().map(|&c| {
-            div()
-                .id(("shell", c as usize))
-                .size(px(22.))
-                .rounded_full()
-                .bg(hex(c))
-                .cursor_pointer()
-                .border_2()
-                .border_color(if c == current { p.ink } else { p.card })
-                .hover(|d| d.border_color(p.muted))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(b) = this.bots.get_mut(this.selected) {
-                        b.color = (c != b.preset().color).then_some(c);
-                        this.save();
-                        cx.notify();
-                    }
-                }))
-        });
-        let codex_note = (bot.provider == Provider::Codex && self.codex_models.is_empty()).then(|| self.codex_query.clone()).flatten();
-        let providers = [Provider::Claude, Provider::Codex].into_iter().map(|pr| {
-            let on = bot.provider == pr;
-            div()
-                .id(pr.label())
-                .px_3()
-                .py_1()
-                .rounded_full()
-                .text_xs()
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.ink).text_color(p.bg))
-                .when(!on, |d| d.border_1().border_color(p.line).text_color(p.muted).hover(|d| d.text_color(p.ink)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let Some(b) = this.bots.get_mut(this.selected) else { return };
-                    if b.provider != pr {
-                        b.provider = pr;
-                        b.model = None;
-                        b.effort = None;
-                        // the meter tracks the provider's session; it refills on the next turn
-                        b.context = (0, 0);
-                        this.selects_stale = true;
-                        if pr == Provider::Codex && this.codex_models.is_empty() {
-                            this.refresh_codex(1, cx);
-                        }
-                        this.save();
-                        cx.notify();
-                    }
-                }))
-                .child(if pr == Provider::Codex { "Codex" } else { "Claude" })
-        });
-        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
-        let field = |d: Div| d.px_3().py_1().rounded(px(10.)).bg(p.bg).border_1().border_color(p.line);
-        div()
-            .mx_6()
-            .mt_3()
-            .p_4()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .rounded(px(16.))
-            .bg(p.card)
-            .border_1()
-            .border_color(p.line)
-            .shadow_sm()
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .child(div().flex_1().flex().flex_col().gap_1().child(label("Name")).child(field(div()).child(Input::new(&self.edit_name).appearance(false))))
-                    .child(div().flex().flex_col().gap_1().child(label("Brain")).child(div().flex().items_center().gap_1().children(providers))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_3()
-                    .child(div().w(px(240.)).flex().flex_col().gap_1().child(label("Model")).child(Select::new(&self.model_select).menu_max_h(px(320.))))
-                    .child(div().w(px(160.)).flex().flex_col().gap_1().child(label("Effort")).child(Select::new(&self.effort_select)))
-                    .when_some(codex_note, |d, failed| {
-                        let pill = |id: &'static str, text: &'static str| div().id(id).mb_1().px_3().py_1().rounded_full().text_xs().bg(p.amber).text_color(hex(0x2B2621)).cursor_pointer().hover(|d| d.opacity(0.85)).child(text);
-                        match failed {
-                            None => d.child(div().mb_2().text_xs().text_color(p.muted).child("asking Codex for your models…")),
-                            Some(e) if e.contains("codex login") => d
-                                .child(div().mb_2().text_xs().text_color(p.muted).child("Codex is not signed in."))
-                                .child(pill("codex-sign-in", "Sign in to Codex").on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx)))),
-                            Some(e) => d
-                                .child(div().mb_2().text_xs().text_color(p.amber).max_w(px(260.)).truncate().child(e))
-                                .child(pill("codex-retry", "Retry").on_click(cx.listener(|this, _, _, cx| this.refresh_codex(1, cx)))),
-                        }
-                    }),
-            )
-            .child(div().flex().flex_col().gap_1().child(label("Role")).child(field(div()).child(Textarea::new(&self.edit_role).appearance(false))))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(label("Egg"))
-                    .children(swatches)
-                    .child(div().flex_1())
-                    .when_some(self.edit_error.clone(), |d, e| d.child(div().text_xs().text_color(p.amber).child(e)))
-                    .child(
-                        div()
-                            .id("save-edit")
-                            .px_4()
-                            .py_1()
-                            .rounded_full()
-                            .bg(p.amber)
-                            .text_sm()
-                            .text_color(hex(0x2B2621))
-                            .cursor_pointer()
-                            .hover(|d| d.opacity(0.85))
-                            .on_click(cx.listener(|this, _, window, cx| this.save_edit(window, cx)))
-                            .child("Save"),
-                    ),
-            )
-            .with_animation("edit-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
-    }
-
-    /// The clock panel: this bot's schedules and a form to add one.
-    fn schedules(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.p;
-        let rows = bot.schedules.iter().map(|s| {
-            let id = s.id;
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .py_1()
-                .text_sm()
-                .child(Icon::new(IconName::Clock).size_4().text_color(p.muted))
-                .child(div().flex_1().truncate().child(s.prompt.clone()))
-                .child(div().text_xs().text_color(p.muted).child(format!("{} · next {}", s.repeat.label(), s.next_run().format("%a %H:%M"))))
-                .child(
-                    div()
-                        .id(("unschedule", id))
-                        .text_color(p.muted)
-                        .cursor_pointer()
-                        .hover(|d| d.text_color(p.ink))
-                        .on_click(cx.listener(move |this, _, _, cx| this.remove_schedule(id, cx)))
-                        .child(Icon::new(IconName::Trash).size_4()),
-                )
-        });
-        let kinds = ["Daily", "Weekdays", "Every N hours", "Every N minutes"].iter().enumerate().map(|(k, label)| {
-            let on = k == self.sched_kind;
-            div()
-                .id(("kind", k))
-                .px_3()
-                .py_1()
-                .rounded_full()
-                .text_xs()
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.ink).text_color(p.bg))
-                .when(!on, |d| d.border_1().border_color(p.line).text_color(p.muted).hover(|d| d.text_color(p.ink)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.sched_kind = k;
-                    let hint = if k < 2 { "09:00" } else { "3" };
-                    this.sched_value.update(cx, |s, cx| s.set_placeholder(hint, window, cx));
-                    cx.notify();
-                }))
-                .child(*label)
-        });
-        let field = |state: &Entity<InputState>| div().px_3().py_1().rounded(px(10.)).bg(p.bg).border_1().border_color(p.line).child(Input::new(state).appearance(false));
-        div()
-            .mx_6()
-            .mt_3()
-            .p_4()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .rounded(px(16.))
-            .bg(p.card)
-            .border_1()
-            .border_color(p.line)
-            .shadow_sm()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("{}'s schedules", bot.name)))
-            .when(bot.schedules.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Nothing scheduled yet.")))
-            .children(rows)
-            .child(div().h(px(1.)).bg(p.line))
-            .child(field(&self.sched_prompt))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .children(kinds)
-                    .child(div().w(px(90.)).child(field(&self.sched_value)))
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("add-schedule")
-                            .px_4()
-                            .py_1()
-                            .rounded_full()
-                            .bg(p.amber)
-                            .text_sm()
-                            .text_color(hex(0x2B2621))
-                            .cursor_pointer()
-                            .hover(|d| d.opacity(0.85))
-                            .on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx)))
-                            .child("Add"),
-                    ),
-            )
-            .when(self.sched_kind == 3, |d| d.child(div().text_xs().text_color(p.muted).child("Short intervals use your plan limit quickly.")))
-            .when_some(self.sched_error.clone(), |d, e| d.child(div().text_xs().text_color(p.amber).child(e)))
-            .with_animation("sched-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
-    }
-
-    /// Small thinking egg and three bouncing dots, shown while the bot works without writing.
-    fn typing(&self, bot: &Bot) -> impl IntoElement {
-        let muted = self.p.muted;
-        let dot = |i: usize| {
-            div().size(px(6.)).rounded_full().bg(muted).with_animation(
-                ElementId::Name(format!("dot-{i}").into()),
-                Animation::new(Duration::from_millis(1100)).repeat(),
-                move |d, t| {
-                    let phase = ((t - i as f32 * 0.14) * std::f32::consts::TAU).sin().max(0.);
-                    d.mb(px(5. * phase)).opacity(0.4 + 0.6 * phase)
-                },
-            )
-        };
-        div()
-            .flex()
-            .items_end()
-            .gap_3()
-            .child(egg(format!("typing-{}", bot.id), hex(bot.color()), 24., Mood::Thinking))
-            .child(div().h(px(24.)).flex().items_end().gap(px(5.)).pb_1().children((0..3).map(dot)))
-            .when_some(bot.status.clone(), |d, s| d.child(div().pb_1().text_xs().text_color(muted).child(s)))
-            .with_animation("typing-in", Animation::new(Duration::from_millis(200)), |d, t| d.opacity(t))
-    }
-
-    fn message(&self, bot: &Bot, i: usize, m: &Msg, cx: &mut Context<Self>) -> AnyElement {
-        let p = self.p;
-        let el = match m {
-            Msg::User(t) => div().flex().justify_end().child(
-                div().max_w(px(520.)).px_4().py_2().rounded(px(18.)).bg(p.ink).text_color(p.bg).child(t.clone()),
-            ),
-            Msg::Bot(t) => {
-                let streaming = bot.busy() && i + 1 == bot.msgs.len();
-                div()
-                    .flex()
-                    .items_start()
-                    .gap_3()
-                    .child(div().mt_1().child(egg(format!("msg-{}-{i}", bot.id), hex(bot.color()), 24., if streaming { Mood::Thinking } else { Mood::Still })))
-                    .child(
-                        div().max_w(px(640.)).px_4().py_3().rounded(px(18.)).bg(p.card).border_1().border_color(p.line).child(
-                            TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true),
-                        ),
-                    )
-            }
-            Msg::Handoff { from, color, text, paused, open, .. } => {
-                let (id, open, paused, from_name) = (bot.id, *open, *paused, from.clone());
-                let shown: String = if open || text.chars().count() <= 320 { text.clone() } else { format!("{}…", text.chars().take(320).collect::<String>()) };
-                div().child(
-                    div()
-                        .max_w(px(640.))
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .px_4()
-                        .py_3()
-                        .rounded(px(18.))
-                        .border_1()
-                        .border_dashed()
-                        .border_color(hex(*color))
-                        .bg(hex(*color).opacity(0.12))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_sm()
-                                .child(egg(format!("from-{id}-{i}"), hex(*color), 18., Mood::Still))
-                                .child(
-                                    div()
-                                        .id(("from", i))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .cursor_pointer()
-                                        .hover(|d| d.underline())
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            if let Some(j) = this.bots.iter().position(|b| b.name == from_name) {
-                                                this.select(j, window, cx);
-                                            }
-                                        }))
-                                        .child(format!("From {from}")),
-                                )
-                                .child(div().flex_1())
-                                .when(paused, |d| {
-                                    d.child(div().text_xs().text_color(p.muted).child(format!("chain paused after {} handoffs", handoff::MAX_HOPS))).child(
-                                        div()
-                                            .id(("continue", i))
-                                            .px_3()
-                                            .py_1()
-                                            .rounded_full()
-                                            .bg(p.amber)
-                                            .text_xs()
-                                            .text_color(hex(0x2B2621))
-                                            .cursor_pointer()
-                                            .hover(|d| d.opacity(0.85))
-                                            .on_click(cx.listener(move |this, _, _, cx| this.continue_chain(id, i, cx)))
-                                            .child("Continue chain"),
-                                    )
-                                }),
-                        )
-                        .child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true))
-                        .when(text.chars().count() > 320, |d| {
-                            d.child(
-                                div()
-                                    .id(("more", i))
-                                    .text_xs()
-                                    .text_color(p.muted)
-                                    .cursor_pointer()
-                                    .hover(|d| d.text_color(p.ink))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(Msg::Handoff { open, .. }) = this.bots.iter_mut().find(|b| b.id == id).and_then(|b| b.msgs.get_mut(i)) {
-                                            *open = !*open;
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .child(if open { "Show less" } else { "Show more" }),
-                            )
-                        }),
-                )
-            }
-            Msg::Scheduled { prompt, label } => div().flex().justify_end().child(
-                div()
-                    .max_w(px(520.))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_4()
-                    .py_2()
-                    .rounded(px(18.))
-                    .border_1()
-                    .border_color(p.amber.opacity(0.6))
-                    .bg(p.amber.opacity(0.12))
-                    .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(IconName::Clock).size_3()).child(label.clone()))
-                    .child(prompt.clone()),
-            ),
-            Msg::SignedIn { provider, prompt } => {
-                let id = bot.id;
-                div()
-                    .ml(px(36.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .text_color(p.ok)
-                    .child(Icon::new(IconName::Check).size_4())
-                    .child(format!("Signed in to {}", if *provider == Provider::Codex { "Codex" } else { "Claude" }))
-                    .when(prompt.is_some(), |d| {
-                        d.child(
-                            div()
-                                .id(("again", i))
-                                .ml_2()
-                                .px_3()
-                                .py_1()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(p.ok)
-                                .text_color(p.ok)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(p.ok.opacity(0.12)))
-                                .on_click(cx.listener(move |this, _, _, cx| this.send_again(id, i, cx)))
-                                .child("Send again"),
-                        )
-                    })
-            }
-            Msg::Divider(label) => div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .my_2()
-                .text_xs()
-                .text_color(p.muted)
-                .child(div().flex_1().h(px(1.)).bg(p.line))
-                .child(label.clone())
-                .child(div().flex_1().h(px(1.)).bg(p.line)),
-            Msg::Sent { to } => {
-                let to_name = to.clone();
-                div().ml(px(36.)).child(
-                    div()
-                        .id(("sent", i))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(p.muted)
-                        .cursor_pointer()
-                        .hover(|d| d.text_color(p.ink))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if let Some(j) = this.bots.iter().position(|b| b.name == to_name) {
-                                this.select(j, window, cx);
-                            }
-                        }))
-                        .child(Icon::new(IconName::ArrowRight).size_3())
-                        .child(format!("sent to {to}")),
-                )
-            }
-            Msg::Error(t) => div()
-                .ml(px(36.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_sm()
-                .text_color(p.amber)
-                .child(Icon::new(IconName::CircleAlert).size_4())
-                .child(t.clone())
-                .when(t.contains("/login") || t.contains("codex login"), |d| {
-                    let codex = t.contains("codex login");
-                    d.child(
-                        div()
-                            .id(("sign-in", i))
-                            .ml_2()
-                            .px_3()
-                            .py_1()
-                            .rounded_full()
-                            .bg(p.amber)
-                            .text_color(hex(0x2B2621))
-                            .cursor_pointer()
-                            .hover(|d| d.opacity(0.85))
-                            .on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx)))
-                            .child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }),
-                    )
-                }),
-            Msg::Tool { verb, target, detail, open, .. } => {
-                let (id, open) = (bot.id, *open);
-                let detail = if detail.is_empty() { "running…".to_string() } else { detail.clone() };
-                div()
-                    .ml(px(36.))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id(("tool", i))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_xs()
-                            .font_family("Menlo")
-                            .text_color(p.muted)
-                            .cursor_pointer()
-                            .hover(|d| d.text_color(p.ink))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(Msg::Tool { open, .. }) = this.bots.iter_mut().find(|b| b.id == id).and_then(|b| b.msgs.get_mut(i)) {
-                                    *open = !*open;
-                                }
-                                cx.notify();
-                            }))
-                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3())
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child(verb.clone()))
-                            .child(div().truncate().child(target.clone())),
-                    )
-                    .when(open, |d| {
-                        d.child(
-                            div()
-                                .ml_5()
-                                .p_3()
-                                .rounded(px(10.))
-                                .bg(p.side)
-                                .text_xs()
-                                .font_family("Menlo")
-                                .text_color(p.muted)
-                                .whitespace_normal()
-                                .child(detail),
-                        )
-                    })
-            }
-        };
-        el.with_animation(
-            ElementId::Name(format!("in-{}-{i}", bot.id).into()),
-            Animation::new(Duration::from_millis(260)).with_easing(ease_out_quint()),
-            |d, t| d.opacity(t).mt(px(10. * (1. - t))),
-        )
-        .into_any_element()
-    }
 }
 
-impl Render for Eggbot {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.edit_open && self.selects_stale {
-            self.sync_selects(window, cx);
-        }
-        div()
-            .size_full()
-            .flex()
-            .bg(self.p.bg)
-            .text_color(self.p.ink)
-            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_quit(window, cx)))
-            .on_action(cx.listener(|_, _: &CloseWindow, _, cx| {
-                cx.hide();
-                set_dock_icon(false);
-            }))
-            .child(self.sidebar(cx))
-            .child(self.chat(cx))
-    }
+/// Puts macOS's "sidebar" material behind the whole window; eggbot's opaque main area paints over it.
+fn add_vibrancy(window: &Window) {
+    use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let (Some(mtm), Ok(handle)) = (objc2::MainThreadMarker::new(), HasWindowHandle::window_handle(window)) else { return };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+    // SAFETY: GPUI's AppKit handle points at its live NSView, and we are on the main thread
+    let view: &NSView = unsafe { h.ns_view.cast::<NSView>().as_ref() };
+    let Some(parent) = (unsafe { view.superview() }) else { return };
+    let effect = NSVisualEffectView::initWithFrame(mtm.alloc(), parent.bounds());
+    effect.setMaterial(NSVisualEffectMaterial::Sidebar);
+    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    effect.setState(NSVisualEffectState::FollowsWindowActiveState);
+    effect.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+    parent.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(view));
 }
 
 /// The Dock icon shows only while the window is visible; the menu bar egg is always there.
@@ -2008,10 +1069,22 @@ fn set_dock_icon(visible: bool) {
 fn main() {
     gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-w", CloseWindow, None)]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-n", NewBot, None),
+            KeyBinding::new("cmd-k", FocusInput, None),
+            // ⌘[ / ⌘] are outdent/indent inside text fields, so switching uses ⌃Tab
+            KeyBinding::new("ctrl-shift-tab", PrevBot, None),
+            KeyBinding::new("ctrl-tab", NextBot, None),
+            KeyBinding::new("escape", StopTurn, None),
+        ]);
+        cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectBot(n - 1), None)));
         cx.set_menus([Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false }]);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(720.)), cx))),
+            // transparent, with a native vibrancy view behind (GPUI's own Blurred has no effect here)
+            window_background: WindowBackgroundAppearance::Transparent,
             titlebar: Some(TitlebarOptions {
                 title: Some("eggbot".into()),
                 appears_transparent: true,
@@ -2019,7 +1092,11 @@ fn main() {
             }),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Eggbot::new(window, cx))).unwrap();
+        gpui_kit::open_window(options, cx, |window, cx| {
+            add_vibrancy(window);
+            cx.new(|cx| Eggbot::new(window, cx))
+        })
+        .unwrap();
         cx.activate(true);
     });
 }

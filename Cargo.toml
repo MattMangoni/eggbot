@@ -8,7 +8,10 @@ async-channel = "2.5.0"
 chrono = "0.4"
 gpui-kit = "0.7.0"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSGraphics"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
+raw-window-handle = "0.6"
+schemars = "1.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tray-icon = "0.26.0"
