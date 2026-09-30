@@ -91,3 +91,6 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - Parameterized actions: `#[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)] #[action(namespace = …)]` needs `schemars` as a direct dependency.
 - Multi-line composer: `TextareaState::new(..).submit_on_enter(true)` + `set_auto_grow(1, 8, cx)` → Enter emits `PressEnter`, Shift+Enter inserts a newline.
 - Soft shadows: pass a `Vec<BoxShadow>` to `.shadow(..)` (hairline + wide faint blur); the stock `shadow_sm/md` look harsh on white.
+- Forced light/dark: set `NSApplication.appearance` (`NSAppearanceNameAqua` / `DarkAqua`, nil = system). The window's effective appearance follows, so `Theme::sync_system_appearance`, the vibrancy view, menus and popovers all switch together.
+- Multi-line `Textarea` adds its own inset (`Size::input_px()`, 10px at medium) even with `appearance(false)`; count it when aligning with neighbours.
+- Checked menu items: build `MenuItem::Action { checked, .. }` directly and call `cx.set_menus` again when the state changes.

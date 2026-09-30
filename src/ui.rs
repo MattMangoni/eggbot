@@ -13,7 +13,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
-use crate::{Bot, Choice, CloseWindow, Eggbot, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Eggbot, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -889,6 +889,8 @@ impl Render for Eggbot {
                     this.select(*n, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, a: &Appearance, window, cx| this.set_appearance(*a, window, cx)))
+            .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
             .on_action(cx.listener(|this, _: &StopTurn, _, cx| {
                 if this.menu_open {
                     this.menu_open = false;

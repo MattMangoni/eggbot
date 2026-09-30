@@ -20,12 +20,32 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
 #[action(namespace = eggbot)]
 struct SelectBot(usize);
+
+/// Light or dark, chosen in the View menu.
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema, Action)]
+#[action(namespace = eggbot)]
+enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    fn next(self) -> Self {
+        match self {
+            Self::System => Self::Light,
+            Self::Light => Self::Dark,
+            Self::Dark => Self::System,
+        }
+    }
+}
 
 // the default bundle has only the component icons; add the extra ones we use
 gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil]);
@@ -310,6 +330,8 @@ struct Saved {
     meters: Vec<Meter>,
     #[serde(default = "default_sidebar")]
     sidebar_w: f32,
+    #[serde(default)]
+    appearance: Appearance,
 }
 
 fn default_sidebar() -> f32 {
@@ -346,6 +368,7 @@ struct Eggbot {
     /// Dropdown options need refilling (bot, provider or Codex model list changed); done in render.
     selects_stale: bool,
     sidebar_w: f32,
+    appearance: Appearance,
     /// Dragging the sidebar's edge.
     resizing: bool,
     scroll: ScrollHandle,
@@ -443,7 +466,8 @@ impl Eggbot {
         .detach();
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), resizing: false, input, scroll: ScrollHandle::new() };
+        let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, resizing: false, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w) = (s.bots, s.next_id, s.meters, s.sidebar_w);
@@ -456,6 +480,8 @@ impl Eggbot {
                 this.selected = 0;
             }
         }
+        // after loading: it saves state
+        this.set_appearance(appearance, window, cx);
         if this.bots.iter().any(|b| b.provider == Provider::Codex) {
             this.refresh_codex(1, cx);
         }
@@ -535,9 +561,28 @@ impl Eggbot {
         cx.quit();
     }
 
+    /// Forces the whole app light or dark (vibrancy, menus and popovers follow) and refreshes the View menu.
+    fn set_appearance(&mut self, appearance: Appearance, window: &mut Window, cx: &mut Context<Self>) {
+        use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication};
+        self.appearance = appearance;
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            let name = match appearance {
+                Appearance::System => None,
+                Appearance::Light => Some(unsafe { NSAppearanceNameAqua }),
+                Appearance::Dark => Some(unsafe { NSAppearanceNameDarkAqua }),
+            };
+            let look = name.and_then(NSAppearance::appearanceNamed);
+            NSApplication::sharedApplication(mtm).setAppearance(look.as_deref());
+        }
+        self.p = Palette::apply(window, cx);
+        set_menus(appearance, cx);
+        self.save();
+        cx.notify();
+    }
+
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "appearance": self.appearance });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -1061,6 +1106,18 @@ fn add_vibrancy(window: &Window) {
     parent.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(view));
 }
 
+fn set_menus(appearance: Appearance, cx: &mut App) {
+    let pick = |name: &str, a: Appearance| MenuItem::Action { name: name.to_string().into(), action: Box::new(a), os_action: None, checked: a == appearance, disabled: false };
+    cx.set_menus([
+        Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
+        Menu {
+            name: "View".into(),
+            items: vec![pick("Match System", Appearance::System), pick("Light", Appearance::Light), pick("Dark", Appearance::Dark), MenuItem::separator(), MenuItem::action("Next Appearance", CycleAppearance)],
+            disabled: false,
+        },
+    ]);
+}
+
 /// The Dock icon shows only while the window is visible; the menu bar egg is always there.
 fn set_dock_icon(visible: bool) {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -1082,9 +1139,9 @@ fn main() {
             KeyBinding::new("ctrl-shift-tab", PrevBot, None),
             KeyBinding::new("ctrl-tab", NextBot, None),
             KeyBinding::new("escape", StopTurn, None),
+            KeyBinding::new("cmd-shift-d", CycleAppearance, None),
         ]);
         cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectBot(n - 1), None)));
-        cx.set_menus([Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false }]);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(720.)), cx))),
             // transparent, with a native vibrancy view behind (GPUI's own Blurred has no effect here)

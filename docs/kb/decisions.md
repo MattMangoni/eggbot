@@ -53,6 +53,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Composer | Multi-line (Enter sends, Shift+Enter newline, up to 8 lines) | |
 | Working state | Spinner + "Thinking…" on the sidebar row | Matteo chose sidebar over top bar |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
+| Appearance | View menu: Match System / Light / Dark, ⌘⇧D cycles, saved in state.json | Matteo chose the menu over a sidebar button |
 
 ## Phases
 
