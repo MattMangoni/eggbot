@@ -86,7 +86,7 @@ fn bar(used: f32, width: f32, p: Palette) -> Div {
         .w(px(width))
         .h(px(4.))
         .rounded_full()
-        .bg(p.line)
+        .bg(p.tint)
         .child(div().h_full().rounded_full().w(relative(used)).bg(if used >= 0.8 { p.warn } else { p.muted }))
 }
 
@@ -192,7 +192,7 @@ impl Eggbot {
             .right_0()
             .h(px(ROW_H))
             .rounded(px(8.))
-            .bg(p.hover)
+            .bg(p.tint)
             .with_spring("selection", SpringAnimation::new(SpringConfig::new(320., 28., 1.)).to(px(self.selected as f32 * (ROW_H + ROW_GAP))).with_epsilon(0.25), |d, top| d.top(top));
 
         let handle = div()
@@ -482,7 +482,7 @@ impl Eggbot {
             })
         }).unwrap_or_else(|| "Claude".into());
         let effort_label = bot.effort.clone().unwrap_or_else(|| "Default effort".into());
-        let fit = |label: &str| (label.chars().count() as f32 * 6.2 + 36.).clamp(72., 260.);
+        let fit = |label: &str| (label.chars().count() as f32 * 6.2 + 28.).clamp(48., 260.);
         let codex_note = (bot.provider == Provider::Codex && self.codex_models.is_empty()).then(|| self.codex_query.clone()).flatten();
         let note = codex_note.map(|failed| match failed {
             None => div().text_xs().text_color(p.muted).child("Loading Codex models…").into_any_element(),
@@ -509,14 +509,15 @@ impl Eggbot {
                     .border_1()
                     .border_color(p.line)
                     .shadow(soft_shadow(p))
-                    .child(div().px_4().pt_3().pb_1().child(Textarea::new(&self.input).appearance(false)))
+                    // the multi-line textarea adds its own 10px inset, so text lines up with the dropdown labels
+                    .child(div().px_2().pt_2().child(Textarea::new(&self.input).appearance(false)))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
-                            .px_2()
-                            .pb_2()
+                            .px_3()
+                            .pb_3()
                             // Select fills its parent, so a fixed-width box sets its size
                             .child(div().flex_none().w(px(fit(&model_label))).child(Select::new(&self.model_select).appearance(false).xsmall().menu_width(px(240.)).menu_max_h(px(320.))))
                             .child(div().w(px(1.)).h(px(14.)).bg(p.line))
@@ -530,7 +531,7 @@ impl Eggbot {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .px_2()
+                    .px_2p5()
                     .pt_1()
                     .child(link("folder", p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))).child(Icon::new(IconName::Folder).size_3()).child(folder))
                     .child(
