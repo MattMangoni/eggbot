@@ -36,6 +36,13 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Login item | Not now; needs an app bundle | |
 | Schedules | Clock button in bot header; daily, weekdays, every N hours, every N minutes; missed → run once on return; busy → queue | 5b |
 | Bot editor | Click the name in the header; edit name (unique, ≤24), role, egg color (8 shells), model (Default/Fable/Opus/Sonnet/Haiku via `--model`) | Color + model apply at once; name + role on Save. "Custom" opens the editor on hatch |
+| Codex interface | `codex app-server` (experimental JSON-RPC), Codex pinned in the image | Chosen for live typing, usage, clean stop |
+| Codex login | `codex login --device-auth` in Terminal, `eggbot-codex` volume | eggbot never touches the token |
+| Usage meters | One group per provider, window labels from duration (5h, 7d, week) | |
+| Codex models | Live list from `model/list` | |
+| Sign-in notice | After Sign in, check every 5 s for 5 min; the error turns into a green "Signed in to X" with "Send again" | Claude check: `claude auth status` exit code |
+| Effort | Per bot, in the editor; Claude low…max, Codex the model's supported levels | |
+| Model/effort UI | Two dropdowns (gpui-kit `Select`) instead of pills; Brain stays two pills | Matteo: pills took too much space |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
@@ -45,4 +52,5 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 3. Containers — done (folder picker, delete, stop confirmed by Matteo)
 4. Handoff — done (first-run "unpaused" handoff was a manual Continue click)
 5. Menu bar (5a) + schedules (5b) — done
-6. Bot editor — built (click the name in the header)
+6. Bot editor — done
+7. Codex provider (parity) — built: app-server, device login, meters per provider, live model list, effort, sign-in notice

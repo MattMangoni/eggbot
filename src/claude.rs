@@ -1,32 +1,69 @@
 //! Runs one turn of the official `claude` CLI and turns its stream-json output into events.
+//! Also holds the types both providers share (see `codex.rs`).
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::sandbox;
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
+pub enum Provider {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
+        }
+    }
+}
+
+/// Plan usage for one provider: named windows (e.g. "5h", "week") with 0..1 used and reset time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Meter {
+    pub provider: Provider,
+    pub windows: Vec<Window>,
+    /// Unix seconds when this was reported.
+    pub at: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Window {
+    pub label: String,
+    pub used: f32,
+    pub reset: i64,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Ev {
-    /// Sandbox progress before claude starts (waking Colima, building the image…).
+    /// Sandbox progress before the agent starts (waking Colima, building the image…).
     Status(String),
     Session(String),
     TextStart,
     Text(String),
     Tool { id: String, name: String, target: String },
     ToolResult { id: String, content: String },
-    /// Plan usage 0..1 per window, with each window's reset time (unix seconds).
-    Usage { five_hour: f32, seven_day: f32, five_reset: i64, seven_reset: i64 },
+    Usage(Meter),
     Done { error: Option<String> },
 }
+
+type Interrupt = Box<dyn FnOnce() + Send>;
 
 /// A running turn; `stop` ends it inside the container too.
 pub struct Handle {
     bot: usize,
-    child: Mutex<Option<Child>>,
+    pub(crate) child: Mutex<Option<Child>>,
+    /// Graceful stop (Codex `turn/interrupt`); without it the process is killed.
+    pub(crate) interrupt: Mutex<Option<Interrupt>>,
 }
 
 impl Handle {
@@ -34,6 +71,9 @@ impl Handle {
         let this = self.clone();
         // docker calls block; keep them off the UI thread
         std::thread::spawn(move || {
+            if let Some(graceful) = this.interrupt.lock().unwrap().take() {
+                return graceful();
+            }
             sandbox::interrupt(this.bot);
             if let Some(c) = this.child.lock().unwrap().as_mut() {
                 let _ = c.kill();
@@ -47,26 +87,35 @@ pub struct Turn {
     pub mount: PathBuf,
     pub prompt: String,
     pub role: String,
+    /// Claude session id or Codex thread id to continue.
     pub session: Option<String>,
-    /// `--model` alias (opus, sonnet, haiku); None = the CLI default.
+    /// Model alias or id; None = the provider's default.
     pub model: Option<String>,
+    /// Reasoning effort level; None = the provider's default.
+    pub effort: Option<String>,
 }
 
-/// Runs one `claude -p` turn in the bot's container; events arrive on the channel, which closes at the end.
-pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
-    let handle = Arc::new(Handle { bot: t.bot, child: Mutex::new(None) });
+/// Runs `turn` on a thread; events arrive on the channel, which closes at the end.
+/// `turn` returns Ok(true) when the agent reported its own end (success or error).
+pub fn spawn(bot: usize, turn: impl FnOnce(&Handle, &dyn Fn(Ev)) -> Result<bool, String> + Send + 'static) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+    let handle = Arc::new(Handle { bot, child: Mutex::new(None), interrupt: Mutex::new(None) });
     let (tx, rx) = async_channel::unbounded();
     let h = handle.clone();
     std::thread::spawn(move || {
         let send = |ev| drop(tx.send_blocking(ev));
-        let error = match turn(&t, &h, &send) {
+        let error = match turn(&h, &send) {
             Ok(true) => return,
-            Ok(false) => "claude ended without a result".to_string(),
+            Ok(false) => "the agent ended without a result".to_string(),
             Err(e) => e,
         };
         send(Ev::Done { error: Some(error) });
     });
     (handle, rx)
+}
+
+/// Runs one `claude -p` turn in the bot's container.
+pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+    spawn(t.bot, move |h, send| turn(&t, h, send))
 }
 
 /// Ok(true) when claude reported its own result (success or error).
@@ -86,6 +135,9 @@ fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
     }
     if let Some(m) = &t.model {
         cmd.args(["--model", m]);
+    }
+    if let Some(e) = &t.effort {
+        cmd.args(["--effort", e]);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not run docker: {e}"))?;
     let stdout = child.stdout.take().unwrap();
@@ -129,9 +181,8 @@ pub fn parse(line: &str) -> Vec<Ev> {
             .collect(),
         "rate_limit_event" => {
             let w = &v["rate_limit_info"]["unifiedWindows"];
-            let f = |k: &str| w[k]["utilization"].as_f64().unwrap_or(0.) as f32;
-            let r = |k: &str| w[k]["resetsAt"].as_i64().unwrap_or(0);
-            vec![Ev::Usage { five_hour: f("five_hour"), seven_day: f("seven_day"), five_reset: r("five_hour"), seven_reset: r("seven_day") }]
+            let window = |label: &str, k: &str| Window { label: label.into(), used: w[k]["utilization"].as_f64().unwrap_or(0.) as f32, reset: w[k]["resetsAt"].as_i64().unwrap_or(0) };
+            vec![Ev::Usage(Meter { provider: Provider::Claude, windows: vec![window("5h", "five_hour"), window("7d", "seven_day")], at: chrono::Local::now().timestamp() })]
         }
         "result" => {
             let error = (v["is_error"] == true).then(|| s("/result"));
@@ -184,14 +235,21 @@ mod tests {
             r#"{"type":"result","is_error":false,"result":"Hi","session_id":"abc"}"#,
             "not json",
         ];
-        let evs: Vec<Ev> = lines.iter().flat_map(|l| parse(l)).collect();
+        let mut evs: Vec<Ev> = lines.iter().flat_map(|l| parse(l)).collect();
+        for e in &mut evs {
+            if let Ev::Usage(m) = e {
+                m.at = 0;
+            }
+        }
+        let window = |label: &str, used, reset| Window { label: label.into(), used, reset };
+        let usage = Ev::Usage(Meter { provider: Provider::Claude, windows: vec![window("5h", 0.03, 100), window("7d", 0.5, 200)], at: 0 });
         assert_eq!(
             evs,
             vec![
                 Ev::Session("abc".into()),
                 Ev::Tool { id: "t1".into(), name: "Read".into(), target: "note.txt".into() },
                 Ev::ToolResult { id: "t1".into(), content: "1\thello".into() },
-                Ev::Usage { five_hour: 0.03, seven_day: 0.5, five_reset: 100, seven_reset: 200 },
+                usage,
                 Ev::TextStart,
                 Ev::Text("Hi".into()),
                 Ev::Session("abc".into()),

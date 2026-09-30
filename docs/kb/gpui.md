@@ -72,3 +72,9 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - Dock icon on/off: `objc2_app_kit::NSApplication::sharedApplication(mtm).setActivationPolicy(Regular|Accessory)` (safe fn in objc2-app-kit 0.3).
 - ⌘Q/⌘W: `actions!` + `cx.bind_keys` + `cx.set_menus`; handle with `.on_action(cx.listener(..))` on the root div.
 - Confirm dialogs: `window.prompt(PromptLevel::Warning, msg, Some(detail), &["Quit", "Cancel"], cx)` → oneshot with the button index.
+
+## Dropdowns
+
+- `component::select::{Select, SelectState, SelectEvent, SelectItem}`. Custom item = struct implementing `SelectItem` (`type Value`, `title()`, `value()`); see `Choice` in `src/main.rs`.
+- `SelectState::new(Vec<Item>, None, window, cx)`; refill with `set_items(items, window, cx)` + `set_selected_value(&v, window, cx)` (both need `window`, so eggbot refills in `render` when `selects_stale`).
+- Listen with `cx.subscribe_in(&state, window, |this, _, ev: &SelectEvent<Vec<Item>>, _, cx| …)`; `SelectEvent::Confirm(Some(value))`.

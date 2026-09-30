@@ -19,19 +19,20 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 ## Layout
 
 - `src/main.rs` — app state, window, sidebar, chat, composer.
-- `src/claude.rs` — runs one `claude -p` turn, parses stream-json into events (`cargo test` covers the parser).
+- `src/claude.rs` — shared agent types (`Provider`, `Ev`, `Turn`, `Handle`, `Meter`) and the `claude -p` runner + stream-json parser (tested).
+- `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
 - `src/tray.rs` — menu bar egg icon and menu.
 - `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
 - `src/egg.rs` — vector egg avatar and its animations (hatch, idle, thinking).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`.
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`.
 
 ## Hard rules
 
 - Claude access only through the unmodified `claude` binary. Never read, store, or forward Claude OAuth tokens; never call Anthropic endpoints directly. See `docs/kb/auth.md`.
-- Codex access only through the official `codex` CLI.
+- Codex access only through the official `codex` CLI (`codex app-server` JSON-RPC, pinned version in the bot image). See `docs/kb/codex.md`.
 - UI stack is `gpui-kit` 0.7 (bundles `gpui-pre` 0.3.7 + `gpui-component`). Import via `gpui_kit::*`, not `gpui::*`.
 
 ## Conventions

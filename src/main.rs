@@ -1,4 +1,5 @@
 mod claude;
+mod codex;
 mod egg;
 mod handoff;
 mod sandbox;
@@ -9,9 +10,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use claude::{Meter, Provider};
 use egg::{Mood, egg};
 use gpui_kit::assets::{Assets, IconName};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -119,6 +122,25 @@ const PRESETS: [Preset; 4] = [
 ];
 const STYLE: &str = " Reply in concise GitHub-flavored markdown.";
 
+/// A dropdown option: what is shown, and what is stored (None = the provider's default).
+#[derive(Clone)]
+struct Choice {
+    value: Option<String>,
+    label: SharedString,
+}
+
+impl SelectItem for Choice {
+    type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
 const SHELLS: [u32; 8] = [0xF5C6A5, 0xC6DDB8, 0xD6CAF0, 0xF3DF9C, 0xB9D8EA, 0xF2B8C6, 0xCFE3D8, 0xE3D2B9];
 const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
@@ -136,6 +158,8 @@ enum Msg {
     Sent { to: String },
     /// A turn started by a schedule, shown where a user message would be.
     Scheduled { prompt: String, label: String },
+    /// Replaces a "not signed in" error once the login works; `prompt` is what failed, for "Send again".
+    SignedIn { provider: Provider, prompt: Option<String> },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -148,6 +172,11 @@ struct Bot {
     // renamed when bots moved into containers: host sessions cannot resume there
     #[serde(rename = "sandbox_session")]
     session: Option<String>,
+    #[serde(default)]
+    provider: Provider,
+    /// Codex thread id, kept apart from the Claude session so switching provider loses neither.
+    #[serde(default)]
+    thread: Option<String>,
     msgs: Vec<Msg>,
     #[serde(default)]
     schedules: Vec<schedule::Schedule>,
@@ -158,6 +187,8 @@ struct Bot {
     color: Option<u32>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
     #[serde(skip, default = "hatched_long_ago")]
     born: Instant,
     #[serde(skip)]
@@ -233,27 +264,9 @@ fn data_dir() -> PathBuf {
 struct Saved {
     next_id: usize,
     bots: Vec<Bot>,
+    /// Last plan usage per provider; saved because it only arrives with a turn or an account query.
     #[serde(default)]
-    usage: Option<Usage>,
-}
-
-/// Last plan usage the CLI reported; saved because it only arrives during a turn.
-#[derive(Serialize, Deserialize, Clone, Copy)]
-struct Usage {
-    five_hour: f32,
-    seven_day: f32,
-    five_reset: i64,
-    seven_reset: i64,
-    at: i64,
-}
-
-impl Usage {
-    /// A window whose reset time has passed is back to zero.
-    fn now(&self) -> (f32, f32) {
-        let t = chrono::Local::now().timestamp();
-        let live = |v: f32, reset: i64| if reset > 0 && t >= reset { 0. } else { v };
-        (live(self.five_hour, self.five_reset), live(self.seven_day, self.seven_reset))
-    }
+    meters: Vec<Meter>,
 }
 
 struct Eggbot {
@@ -264,7 +277,11 @@ struct Eggbot {
     menu_open: bool,
     /// Bot id whose trash icon was clicked once; a second click deletes.
     confirm_delete: Option<usize>,
-    usage: Option<Usage>,
+    meters: Vec<Meter>,
+    /// Codex models this account can use; fetched on demand.
+    codex_models: Vec<codex::Model>,
+    /// None = idle; Some(None) = asking now; Some(Some(e)) = the last question failed with `e`.
+    codex_query: Option<Option<String>>,
     tray: Option<tray::Tray>,
     input: Entity<InputState>,
     sched_open: bool,
@@ -277,6 +294,10 @@ struct Eggbot {
     edit_name: Entity<InputState>,
     edit_role: Entity<TextareaState>,
     edit_error: Option<String>,
+    model_select: Entity<SelectState<Vec<Choice>>>,
+    effort_select: Entity<SelectState<Vec<Choice>>>,
+    /// Dropdown options need refilling (bot, provider or Codex model list changed); done in render.
+    selects_stale: bool,
     scroll: ScrollHandle,
 }
 
@@ -303,6 +324,29 @@ impl Eggbot {
             role.set_auto_grow(4, 12, cx);
             role
         });
+        let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
+        let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
+        cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
+            let SelectEvent::Confirm(Some(model)) = ev else { return };
+            if let Some(b) = this.bots.get_mut(this.selected) {
+                // effort levels differ per model; fall back to the default level
+                b.model = model.clone();
+                b.effort = None;
+                this.selects_stale = true;
+                this.save();
+                cx.notify();
+            }
+        })
+        .detach();
+        cx.subscribe_in(&effort_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
+            let SelectEvent::Confirm(Some(effort)) = ev else { return };
+            if let Some(b) = this.bots.get_mut(this.selected) {
+                b.effort = effort.clone();
+                this.save();
+                cx.notify();
+            }
+        })
+        .detach();
         cx.subscribe_in(&edit_name, window, |this, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 this.save_edit(window, cx);
@@ -331,10 +375,10 @@ impl Eggbot {
         .detach();
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, model_select, effort_select, selects_stale: true, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id, this.usage) = (s.bots, s.next_id, s.usage);
+                (this.bots, this.next_id, this.meters) = (s.bots, s.next_id, s.meters);
                 this.scroll.scroll_to_bottom();
             }
             _ => {
@@ -343,6 +387,9 @@ impl Eggbot {
                 }
                 this.selected = 0;
             }
+        }
+        if this.bots.iter().any(|b| b.provider == Provider::Codex) {
+            this.refresh_codex(1, cx);
         }
         window.on_window_should_close(cx, |_, cx| {
             // closing only hides: the bots keep working and the menu bar egg brings the window back
@@ -422,7 +469,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "usage": self.usage });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -450,11 +497,14 @@ impl Eggbot {
             preset,
             folder: None,
             session: None,
+            provider: Provider::Claude,
+            thread: None,
             msgs: vec![],
             schedules: vec![],
             role: None,
             color: None,
             model: None,
+            effort: None,
             born: Instant::now() + delay,
             poked: None,
             pokes: 0,
@@ -521,10 +571,14 @@ impl Eggbot {
             mount: bot.folder.clone().unwrap_or(scratch),
             prompt,
             role: format!("{}{others}{STYLE}", bot.role()),
-            session: bot.session.clone(),
+            session: if bot.provider == Provider::Codex { bot.thread.clone() } else { bot.session.clone() },
             model: bot.model.clone(),
+            effort: bot.effort.clone(),
         };
-        let (handle, events) = claude::run(turn);
+        let (handle, events) = match bot.provider {
+            Provider::Claude => claude::run(turn),
+            Provider::Codex => codex::run(turn),
+        };
         bot.run = Some(handle);
         cx.spawn(async move |this, cx| {
             while let Ok(ev) = events.recv().await {
@@ -623,6 +677,10 @@ impl Eggbot {
         self.edit_open = true;
         self.sched_open = false;
         self.edit_error = None;
+        self.selects_stale = true;
+        if self.bots[self.selected].provider == Provider::Codex && self.codex_models.is_empty() && self.codex_query != Some(None) {
+            self.refresh_codex(1, cx);
+        }
         cx.notify();
     }
 
@@ -682,8 +740,8 @@ impl Eggbot {
 
     fn apply(&mut self, id: usize, ev: claude::Ev, cx: &mut Context<Self>) {
         use claude::Ev;
-        if let Ev::Usage { five_hour, seven_day, five_reset, seven_reset } = ev {
-            self.usage = Some(Usage { five_hour, seven_day, five_reset, seven_reset, at: chrono::Local::now().timestamp() });
+        if let Ev::Usage(meter) = ev {
+            self.set_meter(meter);
             cx.notify();
             return;
         }
@@ -693,6 +751,7 @@ impl Eggbot {
             _ => None,
         };
         match ev {
+            Ev::Session(s) if !s.is_empty() && bot.provider == Provider::Codex => bot.thread = Some(s),
             Ev::Session(s) if !s.is_empty() => bot.session = Some(s),
             Ev::TextStart => bot.msgs.push(Msg::Bot(String::new())),
             Ev::Text(t) => match bot.msgs.last_mut() {
@@ -773,9 +832,109 @@ impl Eggbot {
         .detach();
     }
 
-    fn sign_in(&mut self, cx: &mut Context<Self>) {
+    /// The login finishes in Terminal; check every 5 s for 5 minutes and tell the user when it works.
+    fn watch_sign_in(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            for _ in 0..60 {
+                cx.background_executor().timer(Duration::from_secs(5)).await;
+                let ok = cx
+                    .background_executor()
+                    .spawn(async move {
+                        match provider {
+                            Provider::Claude => sandbox::claude_signed_in(),
+                            Provider::Codex => codex::account().is_ok(),
+                        }
+                    })
+                    .await;
+                if ok {
+                    this.update(cx, |this, cx| this.signed_in(provider, cx)).ok();
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Turns each bot's latest "not signed in" error for `provider` into a green notice with "Send again".
+    fn signed_in(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        let marker = if provider == Provider::Codex { "codex login" } else { "/login" };
+        for bot in &mut self.bots {
+            let Some(k) = bot.msgs.iter().rposition(|m| matches!(m, Msg::Error(t) if t.contains(marker))) else { continue };
+            let prompt = bot.msgs[..k].iter().rev().find_map(|m| match m {
+                Msg::User(t) => Some(t.clone()),
+                Msg::Handoff { prompt, .. } | Msg::Scheduled { prompt, .. } => Some(prompt.clone()),
+                _ => None,
+            });
+            bot.msgs[k] = Msg::SignedIn { provider, prompt };
+        }
+        if provider == Provider::Codex {
+            self.codex_query = None;
+            self.refresh_codex(1, cx);
+        }
+        self.save();
+        cx.notify();
+    }
+
+    fn send_again(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        if bot.busy() {
+            return;
+        }
+        if let Some(Msg::SignedIn { prompt, .. }) = bot.msgs.get_mut(i)
+            && let Some(text) = prompt.take()
+        {
+            bot.msgs.push(Msg::User(text.clone()));
+            self.start_turn(id, text, 0, cx);
+        }
+    }
+
+    fn set_meter(&mut self, meter: Meter) {
+        self.meters.retain(|m| m.provider != meter.provider);
+        self.meters.push(meter);
+        self.meters.sort_by_key(|m| m.provider.label());
+    }
+
+    /// Codex usage and model list, from a throwaway container (no turn needed).
+    /// With `tries` > 1 it keeps asking every 5 s, e.g. while the user finishes signing in.
+    fn refresh_codex(&mut self, tries: u32, cx: &mut Context<Self>) {
+        if self.codex_query == Some(None) {
+            return;
+        }
+        self.codex_query = Some(None);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let mut answer = Err(String::new());
+            for attempt in 0..tries {
+                if attempt > 0 {
+                    cx.background_executor().timer(Duration::from_secs(5)).await;
+                }
+                answer = cx.background_executor().spawn(async { codex::account() }).await;
+                if answer.is_ok() {
+                    break;
+                }
+            }
+            this.update(cx, |this, cx| {
+                match answer {
+                    Ok((meter, models)) => {
+                        this.set_meter(meter);
+                        this.codex_models = models;
+                        this.codex_query = None;
+                        this.selects_stale = true;
+                        this.save();
+                    }
+                    Err(e) => this.codex_query = Some(Some(e)),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn sign_in(&mut self, codex: bool, cx: &mut Context<Self>) {
+        self.watch_sign_in(if codex { Provider::Codex } else { Provider::Claude }, cx);
         let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
-        let opening = cx.background_executor().spawn(async { sandbox::ready(&|_| {}).and_then(|_| sandbox::sign_in()) });
+        let opening = cx.background_executor().spawn(async move { sandbox::ready(&|_| {}).and_then(|_| sandbox::sign_in(codex)) });
         cx.spawn(async move |this, cx| {
             if let Err(e) = opening.await {
                 this.update(cx, |this, cx| {
@@ -914,38 +1073,38 @@ impl Eggbot {
                     .child(Icon::new(IconName::Plus).size_4())
                     .child("Hatch a bot"),
             )
-            .when_some(self.usage, |d, u| d.child(self.usage_meter(u)))
+            .children(self.meters.iter().map(|m| self.usage_meter(m)))
     }
 
-    fn usage_meter(&self, usage: Usage) -> impl IntoElement {
+    fn usage_meter(&self, meter: &Meter) -> impl IntoElement {
         let p = self.p;
-        let (five_hour, seven_day) = usage.now();
-        let at = chrono::DateTime::from_timestamp(usage.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
-        let bar = |label: &'static str, v: f32| {
-            let v = v.clamp(0., 1.);
+        let now = chrono::Local::now().timestamp();
+        let at = chrono::DateTime::from_timestamp(meter.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+        let bars = meter.windows.iter().map(|w| {
+            // a window whose reset time has passed is back to zero
+            let v = if w.reset > 0 && now >= w.reset { 0. } else { w.used.clamp(0., 1.) };
             div()
                 .flex()
                 .items_center()
                 .gap_2()
                 .text_xs()
                 .text_color(p.muted)
-                .child(div().w(px(20.)).child(label))
+                .child(div().w(px(34.)).child(w.label.clone()))
                 .child(
                     div().flex_1().h(px(4.)).rounded_full().bg(p.line).child(
                         div().h_full().rounded_full().w(relative(v)).bg(if v >= 0.8 { p.amber } else { p.muted.opacity(0.6) }),
                     ),
                 )
                 .child(div().w(px(30.)).text_right().child(format!("{:.0}%", v * 100.)))
-        };
+        });
         div()
             .mt_3()
             .px_1()
             .flex()
             .flex_col()
             .gap_1()
-            .child(bar("5h", five_hour))
-            .child(bar("7d", seven_day))
-            .child(div().text_xs().text_color(p.muted.opacity(0.7)).child(format!("plan usage · updated {at}")))
+            .child(div().text_xs().text_color(p.muted.opacity(0.7)).child(format!("{} · updated {at}", if meter.provider == Provider::Codex { "Codex" } else { "Claude" })))
+            .children(bars)
     }
 
     fn hatch_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1066,10 +1225,7 @@ impl Eggbot {
                             .gap_2()
                             .text_xs()
                             .text_color(p.muted)
-                            .child(match &bot.model {
-                                Some(m) => format!("claude · {m}"),
-                                None => "claude".into(),
-                            })
+                            .child([Some(bot.provider.label().to_string()), bot.model.clone(), bot.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · "))
                             .child("·")
                             .child(div().size(px(6.)).rounded_full().bg(if bot.busy() { p.amber } else { p.ok }))
                             .child(if bot.busy() { "working" } else { "idle" }),
@@ -1213,6 +1369,31 @@ impl Eggbot {
         div().flex_1().flex().flex_col().h_full().child(content).child(composer).into_any_element()
     }
 
+    /// Fills the model and effort dropdowns for the selected bot (options depend on provider and model).
+    fn sync_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selects_stale = false;
+        let Some(bot) = self.bots.get(self.selected) else { return };
+        let choice = |value: Option<String>, label: String| Choice { value, label: label.into() };
+        let models: Vec<Choice> = match bot.provider {
+            Provider::Claude => MODELS.iter().map(|(a, l)| choice(a.map(str::to_string), l.to_string())).collect(),
+            Provider::Codex => std::iter::once(choice(None, "Default".into())).chain(self.codex_models.iter().map(|m| choice(Some(m.id.clone()), m.name.clone()))).collect(),
+        };
+        let levels: Vec<String> = match bot.provider {
+            Provider::Claude => ["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec(),
+            Provider::Codex => self.codex_models.iter().find(|m| bot.model.as_ref().map_or(m.default, |id| *id == m.id)).map(|m| m.efforts.clone()).unwrap_or_default(),
+        };
+        let efforts: Vec<Choice> = std::iter::once(choice(None, "Default".into())).chain(levels.into_iter().map(|l| choice(Some(l.clone()), l))).collect();
+        let (model, effort) = (bot.model.clone(), bot.effort.clone());
+        self.model_select.update(cx, |s, cx| {
+            s.set_items(models, window, cx);
+            s.set_selected_value(&model, window, cx);
+        });
+        self.effort_select.update(cx, |s, cx| {
+            s.set_items(efforts, window, cx);
+            s.set_selected_value(&effort, window, cx);
+        });
+    }
+
     /// The bot editor: name, role, egg color, model. Color and model apply at once; name and role on Save.
     fn editor(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
@@ -1235,10 +1416,11 @@ impl Eggbot {
                     }
                 }))
         });
-        let models = MODELS.iter().enumerate().map(|(k, (alias, label))| {
-            let on = bot.model.as_deref() == *alias;
+        let codex_note = (bot.provider == Provider::Codex && self.codex_models.is_empty()).then(|| self.codex_query.clone()).flatten();
+        let providers = [Provider::Claude, Provider::Codex].into_iter().map(|pr| {
+            let on = bot.provider == pr;
             div()
-                .id(("model", k))
+                .id(pr.label())
                 .px_3()
                 .py_1()
                 .rounded_full()
@@ -1247,13 +1429,20 @@ impl Eggbot {
                 .when(on, |d| d.bg(p.ink).text_color(p.bg))
                 .when(!on, |d| d.border_1().border_color(p.line).text_color(p.muted).hover(|d| d.text_color(p.ink)))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(b) = this.bots.get_mut(this.selected) {
-                        b.model = alias.map(str::to_string);
+                    let Some(b) = this.bots.get_mut(this.selected) else { return };
+                    if b.provider != pr {
+                        b.provider = pr;
+                        b.model = None;
+                        b.effort = None;
+                        this.selects_stale = true;
+                        if pr == Provider::Codex && this.codex_models.is_empty() {
+                            this.refresh_codex(1, cx);
+                        }
                         this.save();
                         cx.notify();
                     }
                 }))
-                .child(*label)
+                .child(if pr == Provider::Codex { "Codex" } else { "Claude" })
         });
         let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
         let field = |d: Div| d.px_3().py_1().rounded(px(10.)).bg(p.bg).border_1().border_color(p.line);
@@ -1274,7 +1463,27 @@ impl Eggbot {
                     .flex()
                     .gap_4()
                     .child(div().flex_1().flex().flex_col().gap_1().child(label("Name")).child(field(div()).child(Input::new(&self.edit_name).appearance(false))))
-                    .child(div().flex().flex_col().gap_1().child(label("Model")).child(div().flex().items_center().gap_1().children(models))),
+                    .child(div().flex().flex_col().gap_1().child(label("Brain")).child(div().flex().items_center().gap_1().children(providers))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_3()
+                    .child(div().w(px(240.)).flex().flex_col().gap_1().child(label("Model")).child(Select::new(&self.model_select).menu_max_h(px(320.))))
+                    .child(div().w(px(160.)).flex().flex_col().gap_1().child(label("Effort")).child(Select::new(&self.effort_select)))
+                    .when_some(codex_note, |d, failed| {
+                        let pill = |id: &'static str, text: &'static str| div().id(id).mb_1().px_3().py_1().rounded_full().text_xs().bg(p.amber).text_color(hex(0x2B2621)).cursor_pointer().hover(|d| d.opacity(0.85)).child(text);
+                        match failed {
+                            None => d.child(div().mb_2().text_xs().text_color(p.muted).child("asking Codex for your models…")),
+                            Some(e) if e.contains("codex login") => d
+                                .child(div().mb_2().text_xs().text_color(p.muted).child("Codex is not signed in."))
+                                .child(pill("codex-sign-in", "Sign in to Codex").on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx)))),
+                            Some(e) => d
+                                .child(div().mb_2().text_xs().text_color(p.amber).max_w(px(260.)).truncate().child(e))
+                                .child(pill("codex-retry", "Retry").on_click(cx.listener(|this, _, _, cx| this.refresh_codex(1, cx)))),
+                        }
+                    }),
             )
             .child(div().flex().flex_col().gap_1().child(label("Role")).child(field(div()).child(Textarea::new(&self.edit_role).appearance(false))))
             .child(
@@ -1524,6 +1733,35 @@ impl Eggbot {
                     .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(IconName::Clock).size_3()).child(label.clone()))
                     .child(prompt.clone()),
             ),
+            Msg::SignedIn { provider, prompt } => {
+                let id = bot.id;
+                div()
+                    .ml(px(36.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(p.ok)
+                    .child(Icon::new(IconName::Check).size_4())
+                    .child(format!("Signed in to {}", if *provider == Provider::Codex { "Codex" } else { "Claude" }))
+                    .when(prompt.is_some(), |d| {
+                        d.child(
+                            div()
+                                .id(("again", i))
+                                .ml_2()
+                                .px_3()
+                                .py_1()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(p.ok)
+                                .text_color(p.ok)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(p.ok.opacity(0.12)))
+                                .on_click(cx.listener(move |this, _, _, cx| this.send_again(id, i, cx)))
+                                .child("Send again"),
+                        )
+                    })
+            }
             Msg::Sent { to } => {
                 let to_name = to.clone();
                 div().ml(px(36.)).child(
@@ -1554,7 +1792,8 @@ impl Eggbot {
                 .text_color(p.amber)
                 .child(Icon::new(IconName::CircleAlert).size_4())
                 .child(t.clone())
-                .when(t.contains("/login"), |d| {
+                .when(t.contains("/login") || t.contains("codex login"), |d| {
+                    let codex = t.contains("codex login");
                     d.child(
                         div()
                             .id(("sign-in", i))
@@ -1566,8 +1805,8 @@ impl Eggbot {
                             .text_color(hex(0x2B2621))
                             .cursor_pointer()
                             .hover(|d| d.opacity(0.85))
-                            .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
-                            .child("Sign in to Claude"),
+                            .on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx)))
+                            .child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }),
                     )
                 }),
             Msg::Tool { verb, target, detail, open, .. } => {
@@ -1625,7 +1864,10 @@ impl Eggbot {
 }
 
 impl Render for Eggbot {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.edit_open && self.selects_stale {
+            self.sync_selects(window, cx);
+        }
         div()
             .size_full()
             .flex()

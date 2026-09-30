@@ -6,7 +6,8 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 
 - One long-lived container per bot: `eggbot-<id>`, label `eggbot=1`, `CMD sleep infinity`; each turn is `docker exec eggbot-<id> claude -p …`.
 - `/work` = the bot's project folder (or its scratch folder `~/Library/Application Support/eggbot/bots/<id>/`).
-- `/claude` = named volume `eggbot-claude`, shared by all bots, `CLAUDE_CONFIG_DIR=/claude`. Holds the login and session transcripts.
+- `/claude` = named volume `eggbot-claude` (`CLAUDE_CONFIG_DIR`), `/codex` = named volume `eggbot-codex` (`CODEX_HOME`); both shared by all bots, hold logins and session transcripts.
+- After creating a container, eggbot removes older `eggbot-bot` images that no container uses.
 - `ensure()` recreates the container when the image tag or the /work mount changes; the volume survives.
 
 ## Facts learned (2026-09-30)

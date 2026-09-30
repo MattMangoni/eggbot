@@ -6,8 +6,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 const DOCKERFILE: &str = include_str!("../docker/bot.Dockerfile");
-/// Shared by all bot containers: the Claude login and session transcripts live here.
-const VOLUME: &str = "eggbot-claude";
+/// Shared by all bot containers: the logins and session transcripts live here.
+const CLAUDE_VOLUME: &str = "eggbot-claude:/claude";
+const CODEX_VOLUME: &str = "eggbot-codex:/codex";
 
 /// Tag changes whenever the Dockerfile changes, so edits rebuild the image and recreate containers.
 fn image() -> String {
@@ -69,19 +70,42 @@ pub fn ensure(bot: usize, mount: &Path, status: &dyn Fn(&str)) -> Result<String,
         Err(_) => {}
     }
     status("Preparing its machine…");
-    let (vol, work) = (format!("{VOLUME}:/claude"), format!("{mount}:/work"));
-    docker(&["run", "-d", "--name", &name, "--label", "eggbot=1", "-v", &vol, "-v", &work, &image]).map(|_| name)
+    let work = format!("{mount}:/work");
+    docker(&["run", "-d", "--name", &name, "--label", "eggbot=1", "-v", CLAUDE_VOLUME, "-v", CODEX_VOLUME, "-v", &work, &image])?;
+    remove_old_images(&image);
+    Ok(name)
 }
 
-/// Opens Terminal with an interactive `claude` in a throwaway container, for Anthropic's own login flow.
-pub fn sign_in() -> Result<(), String> {
-    let cmd = format!("docker run -it --rm -v {VOLUME}:/claude {} claude", image());
+/// Older bot images pile up after Dockerfile changes; docker refuses to remove the ones still in use.
+fn remove_old_images(current: &str) {
+    let tags = docker(&["images", "eggbot-bot", "--format", "{{.Repository}}:{{.Tag}}"]).unwrap_or_default();
+    for old in tags.lines().filter(|t| *t != current) {
+        let _ = docker(&["rmi", old]);
+    }
+}
+
+/// Opens Terminal with the provider's own login flow in a throwaway container; eggbot never sees the token.
+pub fn sign_in(codex: bool) -> Result<(), String> {
+    let login = if codex { "codex login --device-auth" } else { "claude" };
+    let cmd = format!("docker run -it --rm -v {CLAUDE_VOLUME} -v {CODEX_VOLUME} {} {login}", image());
     run(Command::new("osascript").args(["-e", "tell application \"Terminal\" to activate", "-e", &format!("tell application \"Terminal\" to do script \"{cmd}\"")])).map(|_| ())
 }
 
-/// Stops whatever `claude` turn is running inside the bot's container.
+/// True once the shared Claude volume holds a working login (`claude auth status` exits 0).
+pub fn claude_signed_in() -> bool {
+    docker(&["run", "--rm", "-v", CLAUDE_VOLUME, &image(), "claude", "auth", "status"]).is_ok()
+}
+
+/// Stops whatever agent turn is running inside the bot's container.
 pub fn interrupt(bot: usize) {
-    let _ = docker(&["exec", &container(bot), "pkill", "-f", "claude -p"]);
+    let _ = docker(&["exec", &container(bot), "pkill", "-f", "claude -p|codex app-server"]);
+}
+
+/// `codex app-server` in a throwaway container, for account questions when no bot container is needed.
+pub fn codex_oneshot() -> Command {
+    let mut cmd = Command::new("docker");
+    cmd.args(["run", "--rm", "-i", "-v", CODEX_VOLUME, &image(), "codex", "app-server"]);
+    cmd
 }
 
 /// Removes the bot's container; the shared login volume stays.
