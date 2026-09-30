@@ -13,12 +13,15 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 
 - `cargo run` — build and open the app.
 - `cargo build` — compile only. First build takes minutes (GPUI).
+- `cargo test` — parser check.
+- App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/`). Delete it to start fresh.
 
 ## Layout
 
 - `src/main.rs` — app state, window, sidebar, chat, composer.
+- `src/claude.rs` — runs one `claude -p` turn, parses stream-json into events (`cargo test` covers the parser).
 - `src/egg.rs` — vector egg avatar and its animations (hatch, idle, thinking).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`.
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`.
 
 ## Hard rules
 

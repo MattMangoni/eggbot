@@ -26,4 +26,4 @@ Credential facts:
 ## Codex
 
 - Login stored in `~/.codex/auth.json` (a file, mountable read-only).
-- OpenAI terms for this setup not yet checked — do before Phase 2.
+- OpenAI help (checked 2026-09-30): ChatGPT plans can run Codex from the terminal, including scripted `codex exec`. ChatGPT Terms of Use apply. Limits vary by plan; do not rely on a fixed quota.
