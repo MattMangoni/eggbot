@@ -56,12 +56,13 @@ pub fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
     Ok(())
 }
 
-/// The bot's container is running with `mount` at /work; returns its name.
-pub fn ensure(bot: usize, mount: &Path, status: &dyn Fn(&str)) -> Result<String, String> {
+/// The bot's container is running with `mount` at /work and `memory` at /memory; returns its name.
+pub fn ensure(bot: usize, mount: &Path, memory: &Path, status: &dyn Fn(&str)) -> Result<String, String> {
     ready(status)?;
-    let (name, image, mount) = (container(bot), image(), mount.to_string_lossy().to_string());
-    let want = format!("{image}|{mount}");
-    let fmt = r#"{{.Config.Image}}|{{range .Mounts}}{{if eq .Destination "/work"}}{{.Source}}{{end}}{{end}}|{{.State.Running}}"#;
+    let (name, image) = (container(bot), image());
+    let (mount, memory) = (mount.to_string_lossy().to_string(), memory.to_string_lossy().to_string());
+    let want = format!("{image}|{mount}|{memory}");
+    let fmt = r#"{{.Config.Image}}|{{range .Mounts}}{{if eq .Destination "/work"}}{{.Source}}{{end}}{{end}}|{{range .Mounts}}{{if eq .Destination "/memory"}}{{.Source}}{{end}}{{end}}|{{.State.Running}}"#;
     match docker(&["inspect", "-f", fmt, &name]) {
         Ok(s) if s == format!("{want}|true") => return Ok(name),
         Ok(s) if s == format!("{want}|false") => return docker(&["start", &name]).map(|_| name),
@@ -70,8 +71,8 @@ pub fn ensure(bot: usize, mount: &Path, status: &dyn Fn(&str)) -> Result<String,
         Err(_) => {}
     }
     status("Preparing its machine…");
-    let work = format!("{mount}:/work");
-    docker(&["run", "-d", "--name", &name, "--label", "eggbot=1", "-v", CLAUDE_VOLUME, "-v", CODEX_VOLUME, "-v", &work, &image])?;
+    let (work, notes) = (format!("{mount}:/work"), format!("{memory}:/memory"));
+    docker(&["run", "-d", "--name", &name, "--label", "eggbot=1", "-v", CLAUDE_VOLUME, "-v", CODEX_VOLUME, "-v", &work, "-v", &notes, &image])?;
     remove_old_images(&image);
     Ok(name)
 }

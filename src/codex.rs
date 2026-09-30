@@ -18,6 +18,10 @@ pub struct Model {
     pub default: bool,
 }
 
+/// Codex never lets later messages override developer instructions, and a resumed thread keeps the ones
+/// it started with. So these stay fixed, and the changing role travels in `<eggbot-context>` blocks.
+const BASE: &str = "You are a bot inside the eggbot app. Your role, rules and teammates are given in <eggbot-context> blocks inside user messages. The most recent <eggbot-context> block always applies and replaces earlier ones.";
+
 /// Shown in the chat; the UI offers a "Sign in to Codex" button for errors containing `codex login`.
 pub const NOT_SIGNED_IN: &str = "Not signed in to Codex · run codex login";
 
@@ -70,7 +74,7 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 }
 
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
-    let name = sandbox::ensure(t.bot, &t.mount, &|s| send(Ev::Status(s.to_string())))?;
+    let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
     let mut cmd = Command::new("docker");
     cmd.args(["exec", "-i", &name, "codex", "app-server"]);
     let (child, mut rpc) = Rpc::start(cmd)?;
@@ -92,7 +96,7 @@ fn converse(t: &Turn, h: &Handle, send: &dyn Fn(Ev), rpc: &mut Rpc) -> Result<bo
         send(Ev::Usage(meter(&r["rateLimits"])));
     }
     // the container is the sandbox, so Codex runs with full access inside it
-    let opts = json!({ "cwd": "/work", "sandbox": "danger-full-access", "approvalPolicy": "never", "developerInstructions": t.role, "model": t.model });
+    let opts = json!({ "cwd": "/work", "sandbox": "danger-full-access", "approvalPolicy": "never", "developerInstructions": BASE, "model": t.model });
     let resumed = t.session.as_ref().and_then(|id| {
         let mut p = opts.clone();
         p["threadId"] = json!(id);
@@ -104,7 +108,8 @@ fn converse(t: &Turn, h: &Handle, send: &dyn Fn(Ev), rpc: &mut Rpc) -> Result<bo
     };
     let thread_id = thread["thread"]["id"].as_str().unwrap_or_default().to_string();
     send(Ev::Session(thread_id.clone()));
-    let started = rpc.call("turn/start", json!({ "threadId": thread_id, "input": [{ "type": "text", "text": t.prompt }], "effort": t.effort }), &mut forward)?;
+    let text = if t.send_role { format!("<eggbot-context>\n{}\n</eggbot-context>\n\n{}", t.role, t.prompt) } else { t.prompt.clone() };
+    let started = rpc.call("turn/start", json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text }], "effort": t.effort }), &mut forward)?;
     let interrupt = json!({ "jsonrpc": "2.0", "id": 0, "method": "turn/interrupt", "params": { "threadId": thread_id, "turnId": started["turn"]["id"] } });
     let stdin = rpc.stdin.clone();
     *h.interrupt.lock().unwrap() = Some(Box::new(move || write(&stdin, &interrupt)));
@@ -141,6 +146,10 @@ pub fn parse(v: &Value) -> Vec<Ev> {
             vec![Ev::ToolResult { id: s(&item["id"]), content: content.chars().take(2000).collect() }]
         }
         ("account/rateLimits/updated", _) => vec![Ev::Usage(meter(&p["rateLimits"]))],
+        ("thread/tokenUsage/updated", _) => {
+            let u = &p["tokenUsage"];
+            vec![Ev::Context { used: u["last"]["totalTokens"].as_u64(), window: u["modelContextWindow"].as_u64() }]
+        }
         ("turn/completed", _) => {
             let turn = &p["turn"];
             let error = match turn["status"].as_str() {
@@ -235,6 +244,7 @@ mod tests {
             r#"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"e1","command":"/bin/zsh -lc 'cat note.txt'","aggregatedOutput":"hello from probe\n","exitCode":0}}}"#,
             r#"{"method":"item/started","params":{"item":{"type":"reasoning","id":"r1"}}}"#,
             r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1791188704},"secondary":{"usedPercent":40,"windowDurationMins":300,"resetsAt":5}}}}"#,
+            r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"totalTokens":20556},"modelContextWindow":272000}}}"#,
             r#"{"method":"turn/completed","params":{"turn":{"id":"t1","status":"failed","error":{"message":"boom"}}}}"#,
         ];
         let mut evs: Vec<Ev> = lines.iter().flat_map(|l| parse(&serde_json::from_str(l).unwrap())).collect();
@@ -252,6 +262,7 @@ mod tests {
                 Ev::Tool { id: "e1".into(), name: "Shell".into(), target: "cat note.txt".into() },
                 Ev::ToolResult { id: "e1".into(), content: "hello from probe\n".into() },
                 Ev::Usage(Meter { provider: Provider::Codex, windows: vec![window("week", 0.12, 1791188704), window("5h", 0.4, 5)], at: 0 }),
+                Ev::Context { used: Some(20556), window: Some(272000) },
                 Ev::Done { error: Some("boom".into()) },
             ]
         );

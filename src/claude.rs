@@ -53,6 +53,8 @@ pub enum Ev {
     Tool { id: String, name: String, target: String },
     ToolResult { id: String, content: String },
     Usage(Meter),
+    /// Tokens in the session's context now, and/or the model's context window.
+    Context { used: Option<u64>, window: Option<u64> },
     Done { error: Option<String> },
 }
 
@@ -85,6 +87,8 @@ impl Handle {
 pub struct Turn {
     pub bot: usize,
     pub mount: PathBuf,
+    /// The bot's own folder for NOTES.md, mounted at /memory.
+    pub memory: PathBuf,
     pub prompt: String,
     pub role: String,
     /// Claude session id or Codex thread id to continue.
@@ -93,6 +97,8 @@ pub struct Turn {
     pub model: Option<String>,
     /// Reasoning effort level; None = the provider's default.
     pub effort: Option<String>,
+    /// Codex only: send `role` with this turn (new thread, or the role changed since it was last sent).
+    pub send_role: bool,
 }
 
 /// Runs `turn` on a thread; events arrive on the channel, which closes at the end.
@@ -120,12 +126,14 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 
 /// Ok(true) when claude reported its own result (success or error).
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
-    let name = sandbox::ensure(t.bot, &t.mount, &|s| send(Ev::Status(s.to_string())))?;
+    let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
     let mut cmd = Command::new("docker");
     cmd.args(["exec", &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
         .args(["--append-system-prompt", &t.role])
         // clean bots with full power inside their own machine; no tools that reach outside it
         .args(["--setting-sources", "project,local", "--strict-mcp-config", "--permission-mode", "bypassPermissions"])
+        // without this a resumed session keeps the role it started with, ignoring edits
+        .args(["--system-prompt-snapshot", "off"])
         .args(["--disallowedTools", "RemoteTrigger,CronCreate,CronDelete,ScheduleWakeup,PushNotification"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -169,6 +177,12 @@ pub fn parse(line: &str) -> Vec<Ev> {
         "stream_event" => match v["event"]["type"].as_str().unwrap_or_default() {
             "content_block_start" if v["event"]["content_block"]["type"] == "text" => vec![Ev::TextStart],
             "content_block_delta" if v["event"]["delta"]["type"] == "text_delta" => vec![Ev::Text(s("/event/delta/text"))],
+            // the last request's full input + output is what the session occupies now
+            "message_delta" => {
+                let u = &v["event"]["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                vec![Ev::Context { used: Some(n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens") + n("output_tokens")), window: None }]
+            }
             _ => vec![],
         },
         "assistant" => blocks(&v)
@@ -186,7 +200,13 @@ pub fn parse(line: &str) -> Vec<Ev> {
         }
         "result" => {
             let error = (v["is_error"] == true).then(|| s("/result"));
-            vec![Ev::Session(s("/session_id")), Ev::Done { error }]
+            let window = v["modelUsage"].as_object().and_then(|m| m.values().filter_map(|u| u["contextWindow"].as_u64()).max());
+            let mut evs = vec![Ev::Session(s("/session_id"))];
+            if window.is_some() {
+                evs.push(Ev::Context { used: None, window });
+            }
+            evs.push(Ev::Done { error });
+            evs
         }
         _ => vec![],
     }

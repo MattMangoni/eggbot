@@ -121,6 +121,8 @@ const PRESETS: [Preset; 4] = [
     Preset { name: "Custom", blurb: "A blank bot you shape yourself", color: 0xF3DF9C, role: "You are a helpful bot living in eggbot." },
 ];
 const STYLE: &str = " Reply in concise GitHub-flavored markdown.";
+const NOTES: &str = " You keep your own notes in /memory/NOTES.md. When a session starts, read it if it exists. Keep it short and current: durable facts about the user, the project, decisions and open work, never chat logs.";
+const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md now with everything worth keeping from this session, then reply with one short line.";
 
 /// A dropdown option: what is shown, and what is stored (None = the provider's default).
 #[derive(Clone)]
@@ -156,6 +158,8 @@ enum Msg {
     /// Work handed over by another bot; `paused` when the chain hit the hop limit.
     Handoff { from: String, color: u32, prompt: String, text: String, paused: bool, open: bool },
     Sent { to: String },
+    /// Marks where a fresh session began.
+    Divider(String),
     /// A turn started by a schedule, shown where a user message would be.
     Scheduled { prompt: String, label: String },
     /// Replaces a "not signed in" error once the login works; `prompt` is what failed, for "Send again".
@@ -206,7 +210,22 @@ struct Bot {
     hops: u32,
     /// Handoffs waiting for the current turn to end: (prompt, hops).
     #[serde(skip)]
-    queue: Vec<(String, u32)>,
+    queue: Vec<(String, u32, bool)>,
+    /// The running turn uses a throwaway session (schedules): its session id and context are not kept.
+    #[serde(skip)]
+    fresh_turn: bool,
+    /// The running turn saves notes before a fresh start; on success the session is dropped.
+    #[serde(skip)]
+    refreshing: bool,
+    /// Codex: the role last delivered to the current thread; a different role is sent again once.
+    #[serde(default)]
+    codex_role: Option<String>,
+    /// Role sent with the running turn; becomes `codex_role` when the turn succeeds.
+    #[serde(skip)]
+    pending_role: Option<String>,
+    /// Tokens in the main session's context and the model's window (0 = unknown).
+    #[serde(default)]
+    context: (u64, u64),
 }
 
 fn hatched_long_ago() -> Instant {
@@ -513,6 +532,11 @@ impl Eggbot {
             stopped: false,
             hops: 0,
             queue: vec![],
+            fresh_turn: false,
+            refreshing: false,
+            codex_role: None,
+            pending_role: None,
+            context: (0, 0),
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -552,26 +576,41 @@ impl Eggbot {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
         bot.msgs.push(Msg::User(text.clone()));
         let id = bot.id;
-        self.start_turn(id, text, 0, cx);
+        self.start_turn(id, text, 0, false, cx);
     }
 
-    fn start_turn(&mut self, id: usize, prompt: String, hops: u32, cx: &mut Context<Self>) {
+    /// `fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
+    fn start_turn(&mut self, id: usize, prompt: String, hops: u32, fresh: bool, cx: &mut Context<Self>) {
         let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
         let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster, id);
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         bot.stopped = false;
         bot.hops = hops;
-        let scratch = data_dir().join("bots").join(id.to_string());
-        if let Err(e) = std::fs::create_dir_all(&scratch) {
-            eprintln!("eggbot: could not create {}: {e}", scratch.display());
+        bot.fresh_turn = fresh;
+        // separate folders, so a bot without a project never sees its notes inside /work
+        let home = data_dir().join("bots").join(id.to_string());
+        let (scratch, memory) = (home.join("work"), home.join("memory"));
+        for dir in [&scratch, &memory] {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                eprintln!("eggbot: could not create {}: {e}", dir.display());
+            }
         }
+        let role = format!("{}{others}{NOTES}{STYLE}", bot.role());
+        let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
+        bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
+            send_role,
             bot: id,
             mount: bot.folder.clone().unwrap_or(scratch),
+            memory,
             prompt,
-            role: format!("{}{others}{STYLE}", bot.role()),
-            session: if bot.provider == Provider::Codex { bot.thread.clone() } else { bot.session.clone() },
+            role: role.clone(),
+            session: match (fresh, bot.provider) {
+                (true, _) => None,
+                (false, Provider::Codex) => bot.thread.clone(),
+                (false, Provider::Claude) => bot.session.clone(),
+            },
             model: bot.model.clone(),
             effort: bot.effort.clone(),
         };
@@ -594,10 +633,10 @@ impl Eggbot {
     }
 
     /// Starts the turn now, or queues it behind the bot's current turn.
-    fn deliver(&mut self, id: usize, prompt: String, hops: u32, cx: &mut Context<Self>) {
+    fn deliver(&mut self, id: usize, prompt: String, hops: u32, fresh: bool, cx: &mut Context<Self>) {
         match self.bots.iter_mut().find(|b| b.id == id) {
-            Some(b) if b.busy() => b.queue.push((prompt, hops)),
-            Some(_) => self.start_turn(id, prompt, hops, cx),
+            Some(b) if b.busy() => b.queue.push((prompt, hops, fresh)),
+            Some(_) => self.start_turn(id, prompt, hops, fresh, cx),
             None => {}
         }
     }
@@ -619,7 +658,7 @@ impl Eggbot {
                 s.msgs.push(Msg::Sent { to: to_name });
             }
             if !paused {
-                self.deliver(to, prompt, next, cx);
+                self.deliver(to, prompt, next, false, cx);
             }
         }
     }
@@ -639,7 +678,7 @@ impl Eggbot {
             return;
         }
         for (id, prompt) in due {
-            self.deliver(id, prompt, 0, cx);
+            self.deliver(id, prompt, 0, true, cx);
         }
         self.save();
         cx.notify();
@@ -722,7 +761,7 @@ impl Eggbot {
         {
             *paused = false;
             let prompt = prompt.clone();
-            self.deliver(id, prompt, 0, cx);
+            self.deliver(id, prompt, 0, false, cx);
             self.save();
             cx.notify();
         }
@@ -751,8 +790,13 @@ impl Eggbot {
             _ => None,
         };
         match ev {
+            Ev::Session(_) | Ev::Context { .. } if bot.fresh_turn => {}
             Ev::Session(s) if !s.is_empty() && bot.provider == Provider::Codex => bot.thread = Some(s),
             Ev::Session(s) if !s.is_empty() => bot.session = Some(s),
+            Ev::Context { used, window } => {
+                bot.context.0 = used.unwrap_or(bot.context.0);
+                bot.context.1 = window.unwrap_or(bot.context.1);
+            }
             Ev::TextStart => bot.msgs.push(Msg::Bot(String::new())),
             Ev::Text(t) => match bot.msgs.last_mut() {
                 Some(Msg::Bot(s)) => s.push_str(&t),
@@ -778,11 +822,23 @@ impl Eggbot {
                 let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
                 let (reply, hops) = (reply.join("\n\n"), bot.hops);
                 let next = (!bot.queue.is_empty()).then(|| bot.queue.remove(0));
-                if ok {
+                let refreshed = std::mem::take(&mut bot.refreshing);
+                if let Some(role) = bot.pending_role.take().filter(|_| ok) {
+                    bot.codex_role = Some(role);
+                }
+                if refreshed && ok {
+                    // notes are saved: drop the session so the next turn starts clean
+                    match bot.provider {
+                        Provider::Claude => bot.session = None,
+                        Provider::Codex => (bot.thread, bot.codex_role) = (None, None),
+                    }
+                    bot.context.0 = 0;
+                    bot.msgs.push(Msg::Divider("New session · notes kept".into()));
+                } else if ok {
                     self.hand_off(id, reply, hops, cx);
                 }
-                if let Some((prompt, hops)) = next {
-                    self.start_turn(id, prompt, hops, cx);
+                if let Some((prompt, hops, fresh)) = next {
+                    self.start_turn(id, prompt, hops, fresh, cx);
                 }
                 self.save();
             }
@@ -875,6 +931,18 @@ impl Eggbot {
         cx.notify();
     }
 
+    /// The bot saves its notes, then its next turn starts a new session.
+    fn fresh_start(&mut self, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.get_mut(self.selected) else { return };
+        if bot.busy() {
+            return;
+        }
+        bot.refreshing = true;
+        bot.msgs.push(Msg::Scheduled { prompt: "Save your notes before a fresh session.".into(), label: "Fresh start".into() });
+        let id = bot.id;
+        self.start_turn(id, FRESH_START.into(), 0, false, cx);
+    }
+
     fn send_again(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         if bot.busy() {
@@ -884,7 +952,7 @@ impl Eggbot {
             && let Some(text) = prompt.take()
         {
             bot.msgs.push(Msg::User(text.clone()));
-            self.start_turn(id, text, 0, cx);
+            self.start_turn(id, text, 0, false, cx);
         }
     }
 
@@ -1230,6 +1298,39 @@ impl Eggbot {
                             .child(div().size(px(6.)).rounded_full().bg(if bot.busy() { p.amber } else { p.ok }))
                             .child(if bot.busy() { "working" } else { "idle" }),
                     ),
+            )
+            .when(bot.context.1 > 0, |d| {
+                let used = (bot.context.0 as f32 / bot.context.1 as f32).clamp(0., 1.);
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child("context")
+                        .child(div().w(px(48.)).h(px(4.)).rounded_full().bg(p.line).child(div().h_full().rounded_full().w(relative(used)).bg(if used >= 0.7 { p.amber } else { p.muted.opacity(0.6) })))
+                        .child(format!("{:.0}%", used * 100.)),
+                )
+            })
+            .child(
+                div()
+                    .id("fresh")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_3()
+                    .py_1()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(p.line)
+                    .text_xs()
+                    .text_color(p.muted)
+                    .when(!bot.busy(), |d| d.cursor_pointer().hover(|d| d.border_color(p.muted).text_color(p.ink)))
+                    .when(bot.busy(), |d| d.opacity(0.5))
+                    .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
+                    .child(Icon::new(IconName::RefreshCw).size_3())
+                    .child("Fresh start"),
             )
             .child(
                 div()
@@ -1762,6 +1863,16 @@ impl Eggbot {
                         )
                     })
             }
+            Msg::Divider(label) => div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .my_2()
+                .text_xs()
+                .text_color(p.muted)
+                .child(div().flex_1().h(px(1.)).bg(p.line))
+                .child(label.clone())
+                .child(div().flex_1().h(px(1.)).bg(p.line)),
             Msg::Sent { to } => {
                 let to_name = to.clone();
                 div().ml(px(36.)).child(

@@ -14,6 +14,8 @@ Observed 2026-09-30 with Claude Code 2.1.286. Raw sample: run
 - `--allowedTools` / `--disallowedTools`, `--add-dir`.
 - `--setting-sources user,project,local` — which settings load. Without it the bot inherits the user's global hooks, skills, plugins and CLAUDE.md.
 - `--safe-mode` — skip all customizations.
+- `--system-prompt-snapshot on|off` — default `on` records the system prompt on the first request and reuses it on resume, ignoring later `--append-system-prompt`. eggbot passes `off`.
+- `--effort low|medium|high|xhigh|max`; `--autocompact <auto|tokens>`.
 - `--permission-prompts host|none` — who answers permission prompts in `-p` mode.
 
 ## What eggbot passes (see `src/claude.rs`)

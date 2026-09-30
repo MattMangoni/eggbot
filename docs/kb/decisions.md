@@ -43,6 +43,10 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Sign-in notice | After Sign in, check every 5 s for 5 min; the error turns into a green "Signed in to X" with "Send again" | Claude check: `claude auth status` exit code |
 | Effort | Per bot, in the editor; Claude low…max, Codex the model's supported levels | |
 | Model/effort UI | Two dropdowns (gpui-kit `Select`) instead of pills; Brain stays two pills | Matteo: pills took too much space |
+| Context tools | Notes file per bot (/memory/NOTES.md), Fresh start button, context meter; no automatic fresh start | See `context.md` |
+| Schedule sessions | Fresh session each run | |
+| Handoff sessions | Main session | |
+| Role updates | Must reach existing sessions for both providers (Codex: `<eggbot-context>` blocks; Claude: `--system-prompt-snapshot off`) | Matteo: "same behaviour should apply to Claude" |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 
 ## Phases
@@ -53,4 +57,5 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 4. Handoff — done (first-run "unpaused" handoff was a manual Continue click)
 5. Menu bar (5a) + schedules (5b) — done
 6. Bot editor — done
-7. Codex provider (parity) — built: app-server, device login, meters per provider, live model list, effort, sign-in notice
+7. Codex provider (parity) — done
+8. Context management — built: notes file, Fresh start, context meter, fresh schedule sessions, role updates for both providers

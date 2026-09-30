@@ -14,7 +14,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `cargo run` — build and open the app.
 - `cargo build` — compile only. First build takes minutes (GPUI).
 - `cargo test` — parser check.
-- App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/`). Delete it to start fresh.
+- App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/work` scratch, `bots/<id>/memory` notes). Delete it to start fresh.
 
 ## Layout
 
@@ -27,7 +27,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
 - `src/egg.rs` — vector egg avatar and its animations (hatch, idle, thinking).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`.
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`.
 
 ## Hard rules
 
