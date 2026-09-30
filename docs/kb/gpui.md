@@ -10,7 +10,7 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - `gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(|cx| { gpui_kit::init(cx); ... })`.
 - `gpui_kit::open_window(options, cx, |window, cx| cx.new(...))` mounts the Root for you.
 - `use gpui_kit::*;` re-exports gpui. `.when()` needs `use gpui_kit::prelude::FluentBuilder as _;`.
-- Icons: `gpui_kit::assets::IconName` (full Lucide set), rendered with `component::Icon::new(..)`.
+- Icons: `gpui_kit::assets::IconName` names the full Lucide set, but `Assets` embeds ONLY the ~101 icons in `gpui-kit-assets/default-icons.txt`. Others (e.g. `Clock`, `Trash`) render as nothing unless added: `icon_assets!(ExtraIcons, [Clock, Trash])` + an `AppAssets` source that tries `ExtraIcons` then `Assets` (see `src/main.rs`).
 
 ## Theme
 
@@ -54,6 +54,10 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - `Window::render_to_image()` exists behind gpui's `test-support` feature (offscreen alternative, not used).
 - Screenshots and keystrokes run outside the tool sandbox (`screencapture` fails inside it even with permission).
 - Drive the UI for tests: `osascript -e 'tell application "System Events" to set frontmost of (first process whose name is "eggbot") to true' -e 'tell application "System Events" to keystroke "hi"' -e 'tell application "System Events" to key code 36'`.
+
+## Scroll
+
+- After loading history or switching chats, call `scroll.scroll_to_bottom()`; the handle applies it on the next layout.
 
 ## Focus
 

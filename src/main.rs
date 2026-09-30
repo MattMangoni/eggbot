@@ -2,6 +2,7 @@ mod claude;
 mod egg;
 mod handoff;
 mod sandbox;
+mod schedule;
 mod tray;
 
 use std::path::PathBuf;
@@ -18,6 +19,28 @@ use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
 actions!(eggbot, [Quit, CloseWindow]);
+
+// the default bundle has only the component icons; add the extra ones we use
+gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash]);
+
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match ExtraIcons.load(path)? {
+            Some(bytes) => Ok(Some(bytes)),
+            None => Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = Assets.list(path)?;
+        paths.extend(ExtraIcons.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+}
 
 fn hex(c: u32) -> Hsla {
     rgb(c).into()
@@ -108,6 +131,8 @@ enum Msg {
     /// Work handed over by another bot; `paused` when the chain hit the hop limit.
     Handoff { from: String, color: u32, prompt: String, text: String, paused: bool, open: bool },
     Sent { to: String },
+    /// A turn started by a schedule, shown where a user message would be.
+    Scheduled { prompt: String, label: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,6 +146,8 @@ struct Bot {
     #[serde(rename = "sandbox_session")]
     session: Option<String>,
     msgs: Vec<Msg>,
+    #[serde(default)]
+    schedules: Vec<schedule::Schedule>,
     #[serde(skip, default = "hatched_long_ago")]
     born: Instant,
     #[serde(skip)]
@@ -193,6 +220,12 @@ struct Eggbot {
     usage: Option<(f32, f32)>,
     tray: Option<tray::Tray>,
     input: Entity<InputState>,
+    sched_open: bool,
+    /// 0 daily, 1 weekdays, 2 every N hours, 3 every N minutes
+    sched_kind: usize,
+    sched_prompt: Entity<InputState>,
+    sched_value: Entity<InputState>,
+    sched_error: Option<String>,
     scroll: ScrollHandle,
 }
 
@@ -211,11 +244,36 @@ impl Eggbot {
         })
         .detach();
         input.update(cx, |s, cx| s.focus(window, cx));
+        let sched_prompt = cx.new(|cx| InputState::new(window, cx).placeholder("What should it do? e.g. Review yesterday's commits"));
+        let sched_value = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
+        for field in [&sched_prompt, &sched_value] {
+            cx.subscribe_in(field, window, |this, _, ev: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = ev {
+                    this.add_schedule(window, cx);
+                }
+            })
+            .detach();
+        }
+        cx.spawn(async move |this, cx| {
+            // first check soon after launch, so runs missed while eggbot was closed happen once
+            let mut wait = Duration::from_secs(3);
+            loop {
+                cx.background_executor().timer(wait).await;
+                if this.update(cx, |this, cx| this.run_due(cx)).is_err() {
+                    break;
+                }
+                wait = Duration::from_secs(20);
+            }
+        })
+        .detach();
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, input, scroll: ScrollHandle::new() };
         match saved {
-            Some(s) if !s.bots.is_empty() => (this.bots, this.next_id) = (s.bots, s.next_id),
+            Some(s) if !s.bots.is_empty() => {
+                (this.bots, this.next_id) = (s.bots, s.next_id);
+                this.scroll.scroll_to_bottom();
+            }
             _ => {
                 for i in 0..3 {
                     this.hatch(i, Duration::from_millis(300 + 350 * i as u64), cx);
@@ -330,6 +388,7 @@ impl Eggbot {
             folder: None,
             session: None,
             msgs: vec![],
+            schedules: vec![],
             born: Instant::now() + delay,
             poked: None,
             pokes: 0,
@@ -361,6 +420,7 @@ impl Eggbot {
         self.selected = i;
         self.menu_open = false;
         self.confirm_delete = None;
+        self.scroll.scroll_to_bottom();
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -440,6 +500,56 @@ impl Eggbot {
         }
     }
 
+    /// Starts (or queues) every schedule that is due.
+    fn run_due(&mut self, cx: &mut Context<Self>) {
+        let now = chrono::Local::now();
+        let mut due = vec![];
+        for b in &mut self.bots {
+            for s in b.schedules.iter_mut().filter(|s| s.due(now)) {
+                s.anchor = now.timestamp();
+                b.msgs.push(Msg::Scheduled { prompt: s.prompt.clone(), label: s.repeat.label() });
+                due.push((b.id, s.prompt.clone()));
+            }
+        }
+        if due.is_empty() {
+            return;
+        }
+        for (id, prompt) in due {
+            self.deliver(id, prompt, 0, cx);
+        }
+        self.save();
+        cx.notify();
+    }
+
+    fn add_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = self.sched_prompt.read(cx).value().trim().to_string();
+        let value = self.sched_value.read(cx).value().to_string();
+        let repeat = match (prompt.is_empty(), schedule::Repeat::parse(self.sched_kind, &value)) {
+            (true, _) => Err("Write what the bot should do"),
+            (false, r) => r,
+        };
+        match (repeat, self.bots.get_mut(self.selected)) {
+            (Ok(repeat), Some(bot)) => {
+                let id = bot.schedules.iter().map(|s| s.id + 1).max().unwrap_or(0);
+                bot.schedules.push(schedule::Schedule { id, prompt, repeat, anchor: chrono::Local::now().timestamp() });
+                self.sched_error = None;
+                self.sched_prompt.update(cx, |s, cx| s.set_value("", window, cx));
+                self.save();
+            }
+            (Err(e), _) => self.sched_error = Some(e.into()),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn remove_schedule(&mut self, id: usize, cx: &mut Context<Self>) {
+        if let Some(bot) = self.bots.get_mut(self.selected) {
+            bot.schedules.retain(|s| s.id != id);
+            self.save();
+            cx.notify();
+        }
+    }
+
     fn continue_chain(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         if let Some(Msg::Handoff { prompt, paused, .. }) = bot.msgs.get_mut(i)
@@ -498,7 +608,7 @@ impl Eggbot {
                     _ => {}
                 }
                 // this turn's reply = bot text since the message that started it
-                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. })).map_or(0, |i| i + 1);
+                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. } | Msg::Scheduled { .. })).map_or(0, |i| i + 1);
                 let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
                 let (reply, hops) = (reply.join("\n\n"), bot.hops);
                 let next = (!bot.queue.is_empty()).then(|| bot.queue.remove(0));
@@ -823,6 +933,32 @@ impl Eggbot {
             )
             .child(
                 div()
+                    .id("clock")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_3()
+                    .py_1()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if self.sched_open { p.amber } else { p.line })
+                    .text_xs()
+                    .text_color(p.muted)
+                    .cursor_pointer()
+                    .hover(|d| d.border_color(p.muted).text_color(p.ink))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.sched_open = !this.sched_open;
+                        this.sched_error = None;
+                        if this.sched_open {
+                            this.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
+                        }
+                        cx.notify();
+                    }))
+                    .child(Icon::new(IconName::Clock).size_3())
+                    .when(!bot.schedules.is_empty(), |d| d.child(bot.schedules.len().to_string())),
+            )
+            .child(
+                div()
                     .id("folder")
                     .cursor_pointer()
                     .hover(|d| d.border_color(p.muted).text_color(p.ink))
@@ -923,13 +1059,102 @@ impl Eggbot {
         );
 
         // new id per bot, so switching bots replays the fade
-        let content = div().flex_1().flex().flex_col().min_h_0().child(header).child(body).with_animation(
+        let content = div().flex_1().flex().flex_col().min_h_0().child(header).when(self.sched_open, |d| d.child(self.schedules(bot, cx))).child(body).with_animation(
             ElementId::Name(format!("chat-{}", bot.id).into()),
             Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
             |d, t| d.opacity(t).mt(px(6. * (1. - t))),
         );
 
         div().flex_1().flex().flex_col().h_full().child(content).child(composer).into_any_element()
+    }
+
+    /// The clock panel: this bot's schedules and a form to add one.
+    fn schedules(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let rows = bot.schedules.iter().map(|s| {
+            let id = s.id;
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .py_1()
+                .text_sm()
+                .child(Icon::new(IconName::Clock).size_4().text_color(p.muted))
+                .child(div().flex_1().truncate().child(s.prompt.clone()))
+                .child(div().text_xs().text_color(p.muted).child(format!("{} · next {}", s.repeat.label(), s.next_run().format("%a %H:%M"))))
+                .child(
+                    div()
+                        .id(("unschedule", id))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|d| d.text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, _, cx| this.remove_schedule(id, cx)))
+                        .child(Icon::new(IconName::Trash).size_4()),
+                )
+        });
+        let kinds = ["Daily", "Weekdays", "Every N hours", "Every N minutes"].iter().enumerate().map(|(k, label)| {
+            let on = k == self.sched_kind;
+            div()
+                .id(("kind", k))
+                .px_3()
+                .py_1()
+                .rounded_full()
+                .text_xs()
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.ink).text_color(p.bg))
+                .when(!on, |d| d.border_1().border_color(p.line).text_color(p.muted).hover(|d| d.text_color(p.ink)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.sched_kind = k;
+                    let hint = if k < 2 { "09:00" } else { "3" };
+                    this.sched_value.update(cx, |s, cx| s.set_placeholder(hint, window, cx));
+                    cx.notify();
+                }))
+                .child(*label)
+        });
+        let field = |state: &Entity<InputState>| div().px_3().py_1().rounded(px(10.)).bg(p.bg).border_1().border_color(p.line).child(Input::new(state).appearance(false));
+        div()
+            .mx_6()
+            .mt_3()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .rounded(px(16.))
+            .bg(p.card)
+            .border_1()
+            .border_color(p.line)
+            .shadow_sm()
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("{}'s schedules", bot.name)))
+            .when(bot.schedules.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Nothing scheduled yet.")))
+            .children(rows)
+            .child(div().h(px(1.)).bg(p.line))
+            .child(field(&self.sched_prompt))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .children(kinds)
+                    .child(div().w(px(90.)).child(field(&self.sched_value)))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("add-schedule")
+                            .px_4()
+                            .py_1()
+                            .rounded_full()
+                            .bg(p.amber)
+                            .text_sm()
+                            .text_color(hex(0x2B2621))
+                            .cursor_pointer()
+                            .hover(|d| d.opacity(0.85))
+                            .on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx)))
+                            .child("Add"),
+                    ),
+            )
+            .when(self.sched_kind == 3, |d| d.child(div().text_xs().text_color(p.muted).child("Short intervals use your plan limit quickly.")))
+            .when_some(self.sched_error.clone(), |d, e| d.child(div().text_xs().text_color(p.amber).child(e)))
+            .with_animation("sched-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
 
     /// Small thinking egg and three bouncing dots, shown while the bot works without writing.
@@ -1048,6 +1273,21 @@ impl Eggbot {
                         }),
                 )
             }
+            Msg::Scheduled { prompt, label } => div().flex().justify_end().child(
+                div()
+                    .max_w(px(520.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_4()
+                    .py_2()
+                    .rounded(px(18.))
+                    .border_1()
+                    .border_color(p.amber.opacity(0.6))
+                    .bg(p.amber.opacity(0.12))
+                    .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(IconName::Clock).size_3()).child(label.clone()))
+                    .child(prompt.clone()),
+            ),
             Msg::Sent { to } => {
                 let to_name = to.clone();
                 div().ml(px(36.)).child(
@@ -1175,7 +1415,7 @@ fn set_dock_icon(visible: bool) {
 }
 
 fn main() {
-    gpui_kit::application().with_assets(Assets).run(|cx| {
+    gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-w", CloseWindow, None)]);
         cx.set_menus([Menu { name: "eggbot".into(), items: vec![MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false }]);

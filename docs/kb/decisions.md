@@ -43,4 +43,4 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 2. Real CLI on host, streaming, persistence — done
 3. Containers — done (folder picker, delete, stop confirmed by Matteo)
 4. Handoff — done (first-run "unpaused" handoff was a manual Continue click)
-5. Menu bar (5a, built + verified) + schedules (5b)
+5. Menu bar (5a, done) + schedules (5b, built; scheduler verified, clock panel awaits manual test)
