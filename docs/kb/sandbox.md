@@ -29,3 +29,7 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 
 - Token refresh race when several containers share one credentials file.
 - Host-created Claude sessions cannot resume in containers (different config dir): the saved field was renamed to `sandbox_session` so old ids are dropped.
+
+## Launched from Finder
+
+Apps opened from Finder/Dock get `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `docker`/`colima` (Homebrew) are not found. `main()` prepends `/opt/homebrew/bin:/usr/local/bin` before GPUI starts. The docker context in `~/.docker` still works (HOME is set).

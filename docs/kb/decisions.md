@@ -54,6 +54,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Working state | Spinner + "Thinking…" on the sidebar row | Matteo chose sidebar over top bar |
 | KB location | `docs/kb/` in the repo | Readable by bots working on this repo |
 | Appearance | View menu: Match System / Light / Dark, ⌘⇧D cycles, saved in state.json | Matteo chose the menu over a sidebar button |
+| App bundle | `scripts/bundle.sh` → `~/Applications/eggbot.app`, id `com.digitalmaze.eggbot`, ad-hoc signed, icon drawn by `scripts/icon.swift` | Needed for native notifications; no cargo-bundle |
 
 ## Phases
 

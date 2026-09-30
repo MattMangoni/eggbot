@@ -14,6 +14,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `cargo run` — build and open the app.
 - `cargo build` — compile only. First build takes minutes (GPUI).
 - `cargo test` — parser check.
+- `scripts/bundle.sh` — release build → `eggbot.app` (id `com.digitalmaze.eggbot`, ad-hoc signed) in `~/Applications`. Notifications only work from the bundle.
 - App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/work` scratch, `bots/<id>/memory` notes). Delete it to start fresh.
 
 ## Layout
@@ -27,6 +28,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/tray.rs` — menu bar egg icon and menu.
 - `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
+- `scripts/icon.swift` — draws the app icon (used by `bundle.sh`).
 - `src/egg.rs` — small vector egg avatar (still, or wobbling while working).
 - `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`.
 
