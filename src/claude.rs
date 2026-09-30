@@ -18,7 +18,8 @@ pub enum Ev {
     Text(String),
     Tool { id: String, name: String, target: String },
     ToolResult { id: String, content: String },
-    Usage { five_hour: f32, seven_day: f32 },
+    /// Plan usage 0..1 per window, with each window's reset time (unix seconds).
+    Usage { five_hour: f32, seven_day: f32, five_reset: i64, seven_reset: i64 },
     Done { error: Option<String> },
 }
 
@@ -124,7 +125,8 @@ pub fn parse(line: &str) -> Vec<Ev> {
         "rate_limit_event" => {
             let w = &v["rate_limit_info"]["unifiedWindows"];
             let f = |k: &str| w[k]["utilization"].as_f64().unwrap_or(0.) as f32;
-            vec![Ev::Usage { five_hour: f("five_hour"), seven_day: f("seven_day") }]
+            let r = |k: &str| w[k]["resetsAt"].as_i64().unwrap_or(0);
+            vec![Ev::Usage { five_hour: f("five_hour"), seven_day: f("seven_day"), five_reset: r("five_hour"), seven_reset: r("seven_day") }]
         }
         "result" => {
             let error = (v["is_error"] == true).then(|| s("/result"));
@@ -171,7 +173,7 @@ mod tests {
             r#"{"type":"system","subtype":"init","session_id":"abc"}"#,
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/x/note.txt"}}]}}"#,
             r#"{"type":"user","message":{"content":[{"tool_use_id":"t1","type":"tool_result","content":"1\thello"}]}}"#,
-            r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.03},"seven_day":{"utilization":0.5}}}}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.03,"resetsAt":100},"seven_day":{"utilization":0.5,"resetsAt":200}}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}}"#,
             r#"{"type":"result","is_error":false,"result":"Hi","session_id":"abc"}"#,
@@ -184,7 +186,7 @@ mod tests {
                 Ev::Session("abc".into()),
                 Ev::Tool { id: "t1".into(), name: "Read".into(), target: "note.txt".into() },
                 Ev::ToolResult { id: "t1".into(), content: "1\thello".into() },
-                Ev::Usage { five_hour: 0.03, seven_day: 0.5 },
+                Ev::Usage { five_hour: 0.03, seven_day: 0.5, five_reset: 100, seven_reset: 200 },
                 Ev::TextStart,
                 Ev::Text("Hi".into()),
                 Ev::Session("abc".into()),

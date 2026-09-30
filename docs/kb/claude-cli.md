@@ -38,7 +38,7 @@ Traps found:
 | `stream_event` | `event.type`: `message_start`, `content_block_start` (has `content_block.type` = `text`/`tool_use`/`thinking`, tool `name`), `content_block_delta` (`delta.type` = `text_delta` with `text`, `input_json_delta`, `thinking_delta`), `content_block_stop`, `message_delta`, `message_stop` |
 | `assistant` | full message; `message.content[]` blocks: `text`, `tool_use` (`name`, `input`), `thinking` |
 | `user` | `tool_result` blocks (`tool_use_id`, `content`) |
-| `rate_limit_event` | `rate_limit_info.status`, `unifiedWindows.five_hour.utilization` / `seven_day.utilization` (0..1), `resetsAt` (unix) |
+| `rate_limit_event` | `rate_limit_info.status`, `unifiedWindows.five_hour.utilization` / `seven_day.utilization` (0..1), per-window `resetsAt` (unix). Sent only during a turn, so eggbot saves the last values. |
 | `result` | end of turn: `session_id`, `stop_reason`, `is_error`, `result` text, `usage` |
 
 `total_cost_usd` in `result` is an API-price estimate; on a subscription nothing is billed.

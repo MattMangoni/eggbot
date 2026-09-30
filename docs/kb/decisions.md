@@ -19,7 +19,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Bot setup | Clean bots: no user hooks, plugins or claude.ai connectors | Same behavior on host and in containers |
 | Phase 2 work folder | `~/Library/Application Support/eggbot/bots/<id>/` per bot | Real project folder comes with containers |
 | Host permissions | Read + edit only, no shell | Shell opens inside containers (Phase 3) |
-| Usage meter | 5h / 7d bars from `rate_limit_event`, amber at 80% | |
+| Usage meter | 5h / 7d bars from `rate_limit_event`, amber at 80%; last values + reset times saved in `state.json`, shown with "updated HH:MM" | Saved since 2026-09-30 (bars vanished after restart) |
 | Memory | Each bot resumes its own Claude session; history in `state.json` | |
 | Colima VM | 4 CPU / 8 GB (`colima start --cpu 4 --memory 8`) | Was 2 CPU / 2 GB |
 | Container powers | bypassPermissions, shell, network; no tools that reach outside (RemoteTrigger, Cron…) | Container is the sandbox |

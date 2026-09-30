@@ -207,6 +207,27 @@ fn data_dir() -> PathBuf {
 struct Saved {
     next_id: usize,
     bots: Vec<Bot>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+/// Last plan usage the CLI reported; saved because it only arrives during a turn.
+#[derive(Serialize, Deserialize, Clone, Copy)]
+struct Usage {
+    five_hour: f32,
+    seven_day: f32,
+    five_reset: i64,
+    seven_reset: i64,
+    at: i64,
+}
+
+impl Usage {
+    /// A window whose reset time has passed is back to zero.
+    fn now(&self) -> (f32, f32) {
+        let t = chrono::Local::now().timestamp();
+        let live = |v: f32, reset: i64| if reset > 0 && t >= reset { 0. } else { v };
+        (live(self.five_hour, self.five_reset), live(self.seven_day, self.seven_reset))
+    }
 }
 
 struct Eggbot {
@@ -217,7 +238,7 @@ struct Eggbot {
     menu_open: bool,
     /// Bot id whose trash icon was clicked once; a second click deletes.
     confirm_delete: Option<usize>,
-    usage: Option<(f32, f32)>,
+    usage: Option<Usage>,
     tray: Option<tray::Tray>,
     input: Entity<InputState>,
     sched_open: bool,
@@ -271,7 +292,7 @@ impl Eggbot {
         let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, usage: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, input, scroll: ScrollHandle::new() };
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id) = (s.bots, s.next_id);
+                (this.bots, this.next_id, this.usage) = (s.bots, s.next_id, s.usage);
                 this.scroll.scroll_to_bottom();
             }
             _ => {
@@ -359,7 +380,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "usage": self.usage });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -575,8 +596,8 @@ impl Eggbot {
 
     fn apply(&mut self, id: usize, ev: claude::Ev, cx: &mut Context<Self>) {
         use claude::Ev;
-        if let Ev::Usage { five_hour, seven_day } = ev {
-            self.usage = Some((five_hour, seven_day));
+        if let Ev::Usage { five_hour, seven_day, five_reset, seven_reset } = ev {
+            self.usage = Some(Usage { five_hour, seven_day, five_reset, seven_reset, at: chrono::Local::now().timestamp() });
             cx.notify();
             return;
         }
@@ -807,11 +828,13 @@ impl Eggbot {
                     .child(Icon::new(IconName::Plus).size_4())
                     .child("Hatch a bot"),
             )
-            .when_some(self.usage, |d, (h5, d7)| d.child(self.usage_meter(h5, d7)))
+            .when_some(self.usage, |d, u| d.child(self.usage_meter(u)))
     }
 
-    fn usage_meter(&self, five_hour: f32, seven_day: f32) -> impl IntoElement {
+    fn usage_meter(&self, usage: Usage) -> impl IntoElement {
         let p = self.p;
+        let (five_hour, seven_day) = usage.now();
+        let at = chrono::DateTime::from_timestamp(usage.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
         let bar = |label: &'static str, v: f32| {
             let v = v.clamp(0., 1.);
             div()
@@ -828,7 +851,15 @@ impl Eggbot {
                 )
                 .child(div().w(px(30.)).text_right().child(format!("{:.0}%", v * 100.)))
         };
-        div().mt_3().px_1().flex().flex_col().gap_1().child(bar("5h", five_hour)).child(bar("7d", seven_day))
+        div()
+            .mt_3()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(bar("5h", five_hour))
+            .child(bar("7d", seven_day))
+            .child(div().text_xs().text_color(p.muted.opacity(0.7)).child(format!("plan usage · updated {at}")))
     }
 
     fn hatch_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
