@@ -1,5 +1,6 @@
 mod claude;
 mod egg;
+mod handoff;
 mod sandbox;
 
 use std::path::PathBuf;
@@ -101,6 +102,9 @@ enum Msg {
     Bot(String),
     Tool { id: String, verb: String, target: String, detail: String, open: bool },
     Error(String),
+    /// Work handed over by another bot; `paused` when the chain hit the hop limit.
+    Handoff { from: String, color: u32, prompt: String, text: String, paused: bool, open: bool },
+    Sent { to: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -126,6 +130,12 @@ struct Bot {
     status: Option<String>,
     #[serde(skip)]
     stopped: bool,
+    /// Handoff hops that led to the current turn (0 = started by the user).
+    #[serde(skip)]
+    hops: u32,
+    /// Handoffs waiting for the current turn to end: (prompt, hops).
+    #[serde(skip)]
+    queue: Vec<(String, u32)>,
 }
 
 fn hatched_long_ago() -> Instant {
@@ -249,6 +259,8 @@ impl Eggbot {
             run: None,
             status: None,
             stopped: false,
+            hops: 0,
+            queue: vec![],
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -284,8 +296,16 @@ impl Eggbot {
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
         bot.msgs.push(Msg::User(text.clone()));
-        bot.stopped = false;
         let id = bot.id;
+        self.start_turn(id, text, 0, cx);
+    }
+
+    fn start_turn(&mut self, id: usize, prompt: String, hops: u32, cx: &mut Context<Self>) {
+        let roster: Vec<(usize, &str, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str(), b.preset().blurb)).collect();
+        let others = handoff::roster(&roster, id);
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        bot.stopped = false;
+        bot.hops = hops;
         let scratch = data_dir().join("bots").join(id.to_string());
         if let Err(e) = std::fs::create_dir_all(&scratch) {
             eprintln!("eggbot: could not create {}: {e}", scratch.display());
@@ -293,8 +313,8 @@ impl Eggbot {
         let turn = claude::Turn {
             bot: id,
             mount: bot.folder.clone().unwrap_or(scratch),
-            prompt: text,
-            role: format!("{}{STYLE}", bot.preset().role),
+            prompt,
+            role: format!("{}{others}{STYLE}", bot.preset().role),
             session: bot.session.clone(),
         };
         let (handle, events) = claude::run(turn);
@@ -310,6 +330,50 @@ impl Eggbot {
         self.save();
         self.scroll.scroll_to_bottom();
         cx.notify();
+    }
+
+    /// Starts the turn now, or queues it behind the bot's current turn.
+    fn deliver(&mut self, id: usize, prompt: String, hops: u32, cx: &mut Context<Self>) {
+        match self.bots.iter_mut().find(|b| b.id == id) {
+            Some(b) if b.busy() => b.queue.push((prompt, hops)),
+            Some(_) => self.start_turn(id, prompt, hops, cx),
+            None => {}
+        }
+    }
+
+    /// Sends the finished reply to every bot it mentions as @Name.
+    fn hand_off(&mut self, from: usize, reply: String, hops: u32, cx: &mut Context<Self>) {
+        let names: Vec<(usize, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str())).collect();
+        let targets = handoff::mentions(&reply, &names, from);
+        let Some(sender) = self.bots.iter().find(|b| b.id == from) else { return };
+        let (from_name, color, folder) = (sender.name.clone(), sender.preset().color, sender.folder.clone());
+        let next = hops + 1;
+        for to in targets {
+            let Some(target) = self.bots.iter_mut().find(|b| b.id == to) else { continue };
+            let prompt = handoff::prompt(&from_name, &reply, folder.is_some() && folder == target.folder);
+            let paused = next > handoff::MAX_HOPS;
+            target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false });
+            let to_name = target.name.clone();
+            if let Some(s) = self.bots.iter_mut().find(|b| b.id == from) {
+                s.msgs.push(Msg::Sent { to: to_name });
+            }
+            if !paused {
+                self.deliver(to, prompt, next, cx);
+            }
+        }
+    }
+
+    fn continue_chain(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        if let Some(Msg::Handoff { prompt, paused, .. }) = bot.msgs.get_mut(i)
+            && *paused
+        {
+            *paused = false;
+            let prompt = prompt.clone();
+            self.deliver(id, prompt, 0, cx);
+            self.save();
+            cx.notify();
+        }
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -350,10 +414,22 @@ impl Eggbot {
             Ev::Done { error } => {
                 bot.run = None;
                 bot.msgs.retain(|m| !matches!(m, Msg::Bot(s) if s.is_empty()));
+                let ok = !bot.stopped && error.is_none();
                 match (bot.stopped, error) {
                     (true, _) => bot.msgs.push(Msg::Error("Stopped.".into())),
                     (false, Some(e)) => bot.msgs.push(Msg::Error(e)),
                     _ => {}
+                }
+                // this turn's reply = bot text since the message that started it
+                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. })).map_or(0, |i| i + 1);
+                let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
+                let (reply, hops) = (reply.join("\n\n"), bot.hops);
+                let next = (!bot.queue.is_empty()).then(|| bot.queue.remove(0));
+                if ok {
+                    self.hand_off(id, reply, hops, cx);
+                }
+                if let Some((prompt, hops)) = next {
+                    self.start_turn(id, prompt, hops, cx);
                 }
                 self.save();
             }
@@ -467,7 +543,11 @@ impl Eggbot {
                         .flex_1()
                         .overflow_hidden()
                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(b.name.clone()))
-                        .child(div().text_xs().text_color(p.muted).truncate().child(if b.busy() { "thinking…" } else { b.preset().blurb })),
+                        .child(div().text_xs().text_color(p.muted).truncate().child(match (b.busy(), b.queue.len()) {
+                            (true, 0) => "thinking…".to_string(),
+                            (true, n) => format!("thinking… · {n} queued"),
+                            _ => b.preset().blurb.to_string(),
+                        })),
                 )
                 .child(trash)
         });
@@ -816,6 +896,101 @@ impl Eggbot {
                             TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true),
                         ),
                     )
+            }
+            Msg::Handoff { from, color, text, paused, open, .. } => {
+                let (id, open, paused, from_name) = (bot.id, *open, *paused, from.clone());
+                let shown: String = if open || text.chars().count() <= 320 { text.clone() } else { format!("{}…", text.chars().take(320).collect::<String>()) };
+                div().child(
+                    div()
+                        .max_w(px(640.))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .px_4()
+                        .py_3()
+                        .rounded(px(18.))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(hex(*color))
+                        .bg(hex(*color).opacity(0.12))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_sm()
+                                .child(egg(format!("from-{id}-{i}"), hex(*color), 18., Mood::Still))
+                                .child(
+                                    div()
+                                        .id(("from", i))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .cursor_pointer()
+                                        .hover(|d| d.underline())
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            if let Some(j) = this.bots.iter().position(|b| b.name == from_name) {
+                                                this.select(j, window, cx);
+                                            }
+                                        }))
+                                        .child(format!("From {from}")),
+                                )
+                                .child(div().flex_1())
+                                .when(paused, |d| {
+                                    d.child(div().text_xs().text_color(p.muted).child(format!("chain paused after {} handoffs", handoff::MAX_HOPS))).child(
+                                        div()
+                                            .id(("continue", i))
+                                            .px_3()
+                                            .py_1()
+                                            .rounded_full()
+                                            .bg(p.amber)
+                                            .text_xs()
+                                            .text_color(hex(0x2B2621))
+                                            .cursor_pointer()
+                                            .hover(|d| d.opacity(0.85))
+                                            .on_click(cx.listener(move |this, _, _, cx| this.continue_chain(id, i, cx)))
+                                            .child("Continue chain"),
+                                    )
+                                }),
+                        )
+                        .child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true))
+                        .when(text.chars().count() > 320, |d| {
+                            d.child(
+                                div()
+                                    .id(("more", i))
+                                    .text_xs()
+                                    .text_color(p.muted)
+                                    .cursor_pointer()
+                                    .hover(|d| d.text_color(p.ink))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(Msg::Handoff { open, .. }) = this.bots.iter_mut().find(|b| b.id == id).and_then(|b| b.msgs.get_mut(i)) {
+                                            *open = !*open;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(if open { "Show less" } else { "Show more" }),
+                            )
+                        }),
+                )
+            }
+            Msg::Sent { to } => {
+                let to_name = to.clone();
+                div().ml(px(36.)).child(
+                    div()
+                        .id(("sent", i))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|d| d.text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(j) = this.bots.iter().position(|b| b.name == to_name) {
+                                this.select(j, window, cx);
+                            }
+                        }))
+                        .child(Icon::new(IconName::ArrowRight).size_3())
+                        .child(format!("sent to {to}")),
+                )
             }
             Msg::Error(t) => div()
                 .ml(px(36.))
