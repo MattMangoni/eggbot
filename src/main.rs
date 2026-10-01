@@ -391,6 +391,8 @@ struct Eggbot {
     appearance: Appearance,
     /// The window is in front; otherwise news goes out as notifications.
     active: bool,
+    /// The sidebar row being dragged, to hide drop lines that would change nothing.
+    dragging: Option<usize>,
     /// Dragging the sidebar's edge.
     resizing: bool,
     /// The chat's virtual list: one row per message of the selected bot, plus the typing row.
@@ -497,7 +499,7 @@ impl Eggbot {
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
@@ -720,6 +722,21 @@ impl Eggbot {
             // ponytail: removals are assumed at the tail (empty replies, quiet runs); reset if middle removals appear
             self.list.splice(count - 1..old - 1, 0);
         }
+    }
+
+    /// Moves bot `from` to just above row `before` (`before` = len: the end); the selection stays on the same bot.
+    fn move_bot(&mut self, from: usize, before: usize, cx: &mut Context<Self>) {
+        self.dragging = None;
+        cx.notify();
+        if from >= self.bots.len() || before > self.bots.len() || before == from || before == from + 1 {
+            return;
+        }
+        let selected = self.bots[self.selected].id;
+        let bot = self.bots.remove(from);
+        self.bots.insert(if before > from { before - 1 } else { before }, bot);
+        self.selected = self.bots.iter().position(|b| b.id == selected).unwrap_or(0);
+        self.save();
+        cx.notify();
     }
 
     /// The selected bot has been seen.

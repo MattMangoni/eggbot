@@ -18,6 +18,8 @@ use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Eggbot, OpenS
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
+/// The line that shows where a dragged bot will land.
+const DROP_LINE: u32 = 0x0A84FF;
 const READ_W: f32 = 720.;
 const SIDEBAR_MIN: f32 = 200.;
 const SIDEBAR_MAX: f32 = 420.;
@@ -133,8 +135,18 @@ impl Eggbot {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
+        let me = cx.entity().downgrade();
+        // a bot dropped on row `i` lands just above it; the line shows only where that changes the order
+        let drop_line = move |group: SharedString, before: usize, from: Option<usize>| {
+            let noop = from.is_some_and(|f| before == f || before == f + 1);
+            div().absolute().left_1().right_1().top(px(-ROW_GAP / 2. - 1.)).h(px(2.)).rounded_full().when(!noop, |d| {
+                // GPUI applies group drag styles only to elements with a hitbox; a no-op group hover adds one
+                d.group_hover(group.clone(), |s| s).group_drag_over::<DraggedBot>(group, |s| s.bg(hex(DROP_LINE)))
+            })
+        };
         let rows = self.bots.iter().enumerate().map(|(i, b)| {
             let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
+            let group: SharedString = format!("row-{id}").into();
             let subtitle = match (b.busy(), b.queue.len()) {
                 (true, 0) => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
                 (true, n) => format!("Thinking… · {n} queued"),
@@ -150,7 +162,7 @@ impl Eggbot {
                 .text_xs()
                 .cursor_pointer()
                 .when(confirming, |d| d.bg(p.err).text_color(hex(0xFFFFFF)).px_2().child("Delete?"))
-                .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover("row", |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)).child(Icon::new(IconName::Trash).size_3p5()))
+                .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)).child(Icon::new(IconName::Trash).size_3p5()))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     if this.confirm_delete == Some(id) {
@@ -160,9 +172,11 @@ impl Eggbot {
                         cx.notify();
                     }
                 }));
+            let me = me.clone();
             div()
                 .id(("bot", id))
-                .group("row")
+                .group(group.clone())
+                .relative()
                 .h(px(ROW_H))
                 .flex()
                 .items_center()
@@ -172,6 +186,17 @@ impl Eggbot {
                 .cursor_pointer()
                 .when(i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
                 .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
+                // drag a row onto another to reorder
+                .on_drag(DraggedBot { ix: i, name: b.name.clone().into(), color: b.color(), p }, move |d, _, _, cx| {
+                    me.update(cx, |this, cx| {
+                        this.dragging = Some(d.ix);
+                        cx.notify();
+                    })
+                    .ok();
+                    cx.new(|_| d.clone())
+                })
+                .on_drop(cx.listener(move |this, d: &DraggedBot, _, cx| this.move_bot(d.ix, i, cx)))
+                .child(drop_line(group.clone(), i, self.dragging))
                 .child(egg(format!("side-{id}"), hex(b.color()), 16., b.mood()))
                 .child(
                     div()
@@ -261,9 +286,22 @@ impl Eggbot {
                     .id("bots")
                     .flex_1()
                     .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
                     .px_2()
                     .pt_1()
-                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(!self.bots.is_empty(), |d| d.child(highlight)).children(rows)),
+                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(!self.bots.is_empty(), |d| d.child(highlight)).children(rows))
+                    // the space below the last bot: drop here to move a bot to the end
+                    .child(
+                        div()
+                            .id("bots-end")
+                            .group("bots-end")
+                            .relative()
+                            .flex_grow(1.)
+                            .min_h(px(ROW_H))
+                            .on_drop(cx.listener(|this, d: &DraggedBot, _, cx| this.move_bot(d.ix, this.bots.len(), cx)))
+                            .child(drop_line("bots-end".into(), self.bots.len(), self.dragging)),
+                    ),
             )
             .children(self.meters.iter().map(|m| self.usage_meter(m)))
             .child(div().h_3())
@@ -968,5 +1006,35 @@ impl Render for Eggbot {
             }))
             .child(self.sidebar(cx))
             .child(self.chat(cx))
+    }
+}
+
+/// A sidebar row being dragged; it also draws the small card that follows the pointer.
+#[derive(Clone)]
+struct DraggedBot {
+    ix: usize,
+    name: SharedString,
+    color: u32,
+    p: Palette,
+}
+
+impl Render for DraggedBot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded(px(8.))
+            .bg(p.card)
+            .border_1()
+            .border_color(p.line)
+            .shadow(soft_shadow(p))
+            .text_sm()
+            .text_color(p.ink)
+            .child(egg("dragged", hex(self.color), 14., Mood::Still))
+            .child(self.name.clone())
     }
 }
