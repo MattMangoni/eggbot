@@ -5,10 +5,24 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 ## Layout
 
 - One long-lived container per bot: `eggbot-<id>`, label `eggbot=1`, `CMD sleep infinity`; each turn is `docker exec eggbot-<id> claude -p …`.
-- `/work` = the bot's project folder (or its scratch folder `~/Library/Application Support/eggbot/bots/<id>/`).
+- `/work/<name>` = one user-picked folder. With none picked, scratch `~/Library/Application Support/eggbot/bots/<id>/work` is mounted at `/work` instead.
 - `/claude` = named volume `eggbot-claude` (`CLAUDE_CONFIG_DIR`), `/codex` = named volume `eggbot-codex` (`CODEX_HOME`); both shared by all bots, hold logins and session transcripts.
+- `/memory` = that bot's notes folder. It is not inside `/work`.
 - After creating a container, eggbot removes older `eggbot-bot` images that no container uses.
-- `ensure()` recreates the container when the image tag or the /work mount changes; the volume survives.
+- `ensure()` recreates the container when the image tag or the mount set changes; the login volumes survive. A stopped container with the same mounts is started. Mount edits apply on the next turn.
+
+## Multiple folders
+
+Each bot stores `folders: [{path, name}]` in `state.json`. The folder picker is the only way in: eggbot never mounts a path the user did not pick. New paths are canonicalized, so a symlink and its target (and macOS `/var` vs `/private/var`) are one mount. A saved `folder` string from before this is folded in on load.
+
+- No folders: scratch at `/work`, as before.
+- One or more: each is a bind at `/work/<name>`, not at `/work`. `/work` itself is only the image directory, so files written there disappear when the container is recreated. The turn starts in the single folder (`docker exec -w`, Codex `cwd`); with several it starts in `/work`. The role text lists the paths.
+- A bot that used to have its project at `/work` moves to `/work/<name>` the next time the container is created. Sessions can still mention the old paths; the role text has the new ones.
+- `name` comes from the last path component. Characters other than ASCII letters, digits, `.`, `_` and `-` become `-`. A clash on that bot gets `-2`, `-3` (`docs`, `docs-2`). The name is stored, so removing one folder does not rename the others.
+- Paths that contain `:`, `,`, a tab or a newline are refused. `-v host:dest` cannot carry `:` or `,`, and the mount check splits inspect output on tabs.
+- Cap is 16 folders per bot (`MAX_MOUNTS`). Docker Engine has no small mount limit, but each bind is a macOS file share (OrbStack, Docker Desktop or Colima) and `docker run` must stay under `ARG_MAX`. 16 plus the two login volumes and `/memory` is far under both. The header refuses another add; `ensure` refuses a longer list.
+- A folder and a subdirectory of it can both be mounted. In the container they are siblings (`/work/proj` and `/work/crates`), so the child's files show up twice. The role text says so.
+- Handoffs describe shared and nested mounts; see `handoff.md`.
 
 ## Facts learned (2026-09-30)
 

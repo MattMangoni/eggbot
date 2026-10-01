@@ -1,5 +1,7 @@
 //! Bots hand work to each other by writing `@Name` in a reply.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 /// Chains pause after this many automatic handoffs and wait for the user.
@@ -88,13 +90,66 @@ pub fn roster(bots: &[(usize, &str, &str)], me: usize) -> String {
 }
 
 /// What the receiving bot is told.
-pub fn prompt(from: &str, text: &str, same_folder: bool) -> String {
-    let context = if same_folder {
-        "You share the same project folder (/work), so you can open the files they changed."
-    } else {
-        "They work in a different folder; you cannot see their files."
-    };
-    format!("Handoff from {from}, another bot in eggbot. {context}\n\n{text}")
+/// Each mount is `(host path, container path)`. Partial overlap is spelled out; see `docs/kb/handoff.md`.
+pub fn prompt(from: &str, text: &str, mine: &[(&Path, &str)], theirs: &[(&Path, &str)]) -> String {
+    format!("Handoff from {from}, another bot in eggbot. {}\n\n{text}", folder_context(mine, theirs))
+}
+
+const DIFFERENT: &str = "They work in a different folder; you cannot see their files.";
+
+/// How the receiver's mounts relate to the sender's. Host paths are compared; container paths are named.
+fn folder_context(mine: &[(&Path, &str)], theirs: &[(&Path, &str)]) -> String {
+    if mine.is_empty() || theirs.is_empty() {
+        return DIFFERENT.into();
+    }
+    let mut shared = vec![];
+    let mut shared_paths = vec![];
+    for &(mp, md) in mine {
+        for &(tp, td) in theirs {
+            if mp == tp {
+                shared_paths.push(mp);
+                shared.push(if md == td { md.to_string() } else { format!("{md} (theirs is {td})") });
+            }
+        }
+    }
+    let under_shared = |path: &Path| shared_paths.iter().any(|s| path.starts_with(s));
+    let mut extra = vec![];
+    for &(mp, md) in mine {
+        if under_shared(mp) {
+            continue;
+        }
+        let closest = theirs.iter().copied().filter(|&(tp, _)| mp.starts_with(tp) && mp != tp).max_by_key(|&(tp, _)| tp.components().count());
+        if let Some((_, td)) = closest {
+            extra.push(format!("Your {md} is inside their {td}, so they can see your files and you cannot see the rest of that folder."));
+        }
+    }
+    for &(tp, td) in theirs {
+        if under_shared(tp) {
+            continue;
+        }
+        let closest = mine.iter().copied().filter(|&(mp, _)| tp.starts_with(mp) && tp != mp).max_by_key(|&(mp, _)| mp.components().count());
+        if let Some((_, md)) = closest {
+            extra.push(format!("Their {td} is inside your {md}, so you can see their files there and they cannot see the rest of your folder."));
+        }
+    }
+    match (shared.is_empty(), extra.is_empty()) {
+        (true, true) => DIFFERENT.into(),
+        (false, true) => format!("You share {} with them, so you can open the files they changed there.", join_and(&shared)),
+        (true, false) => extra.join(" "),
+        (false, false) => format!("You share {} with them, so you can open the files they changed there. {}", join_and(&shared), extra.join(" ")),
+    }
+}
+
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        rest => {
+            let (last, head) = rest.split_last().unwrap();
+            format!("{}, and {last}", head.join(", "))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +203,37 @@ mod tests {
         let old = r#"{"prompt":"ship it","hops":2}"#;
         let loaded = serde_json::from_str::<Pending>(old).unwrap();
         assert!(!loaded.fresh && !loaded.handoff);
+    }
+
+    #[test]
+    fn folder_overlap_is_named() {
+        let proj = Path::new("/repos/proj");
+        let other = Path::new("/repos/other");
+        let crates = Path::new("/repos/proj/crates");
+        let deep = Path::new("/repos/proj/crates/api");
+        let share = |mine: &[(&Path, &str)], theirs: &[(&Path, &str)]| prompt("Implementer", "look", mine, theirs);
+        assert_eq!(
+            share(&[(proj, "/work/proj")], &[(proj, "/work/proj")]),
+            "Handoff from Implementer, another bot in eggbot. You share /work/proj with them, so you can open the files they changed there.\n\nlook"
+        );
+        assert_eq!(
+            share(&[(proj, "/work/proj")], &[(proj, "/work/proj-2")]),
+            "Handoff from Implementer, another bot in eggbot. You share /work/proj (theirs is /work/proj-2) with them, so you can open the files they changed there.\n\nlook"
+        );
+        assert_eq!(
+            share(&[(proj, "/work/proj"), (other, "/work/other")], &[(proj, "/work/proj"), (other, "/work/other")]),
+            "Handoff from Implementer, another bot in eggbot. You share /work/proj and /work/other with them, so you can open the files they changed there.\n\nlook"
+        );
+        assert!(share(&[], &[(proj, "/work/proj")]).contains("different folder"));
+        assert!(share(&[(proj, "/work/proj")], &[(other, "/work/other")]).contains("different folder"));
+        assert!(share(&[(crates, "/work/crates")], &[(proj, "/work/proj")]).contains("Your /work/crates is inside their /work/proj"));
+        assert!(share(&[(proj, "/work/proj")], &[(crates, "/work/crates")]).contains("Their /work/crates is inside your /work/proj"));
+        // the closer parent wins, and a child of a shared folder is not repeated
+        let nested = share(&[(deep, "/work/api")], &[(proj, "/work/proj"), (crates, "/work/crates")]);
+        assert!(nested.contains("inside their /work/crates"));
+        assert!(!nested.contains("inside their /work/proj"));
+        let both = share(&[(proj, "/work/proj"), (Path::new("/elsewhere/sub"), "/work/sub")], &[(proj, "/work/proj"), (Path::new("/elsewhere"), "/work/elsewhere")]);
+        assert!(both.contains("You share /work/proj"));
+        assert!(both.contains("Your /work/sub is inside their /work/elsewhere"));
     }
 }

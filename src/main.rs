@@ -272,7 +272,11 @@ struct Bot {
     id: usize,
     name: String,
     preset: usize,
+    /// User-picked folders, each mounted at `/work/<name>`.
     #[serde(default)]
+    folders: Vec<sandbox::Mount>,
+    /// Single folder from before multi-mount. Folded into `folders` on load.
+    #[serde(default, skip_serializing)]
     folder: Option<PathBuf>,
     // renamed when bots moved into containers: host sessions cannot resume there
     #[serde(rename = "sandbox_session")]
@@ -438,6 +442,8 @@ struct Eggbot {
     /// Bot list visible. The width is kept while it is closed.
     sidebar_open: bool,
     appearance: Appearance,
+    /// Shown under the composer when adding a folder is refused.
+    folder_error: Option<String>,
     /// The window is in front; otherwise news goes out as notifications.
     active: bool,
     /// ⌘F search in the open chat: the query field, matching message indices (oldest first) and the current one.
@@ -575,11 +581,14 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared);
+                for b in &mut this.bots {
+                    sandbox::adopt_legacy(&mut b.folders, b.folder.take());
+                }
                 this.restore_handoffs();
             }
             _ => {
@@ -729,6 +738,7 @@ impl Eggbot {
             id: self.next_id,
             name,
             preset,
+            folders: vec![],
             folder: None,
             session: None,
             provider: Provider::Claude,
@@ -768,6 +778,7 @@ impl Eggbot {
         self.edit_open = false;
         self.sched_open = false;
         self.settings_open = false;
+        self.folder_error = None;
         (self.find_open, self.find_hits) = (false, vec![]);
         self.list.scroll_to_end();
         self.input.update(cx, |s, cx| s.focus(window, cx));
@@ -925,7 +936,7 @@ impl Eggbot {
         bot.hops = hops;
         bot.fresh_turn = fresh;
         bot.current = Some(pending);
-        // separate folders, so a bot without a project never sees its notes inside /work
+        // notes stay in /memory; scratch is /work only when the user has mounted nothing
         let home = data_dir().join("bots").join(id.to_string());
         let (scratch, memory) = (home.join("work"), home.join("memory"));
         for dir in [&scratch, &memory] {
@@ -933,13 +944,14 @@ impl Eggbot {
                 eprintln!("eggbot: could not create {}: {e}", dir.display());
             }
         }
-        let role = format!("{}{others}{NOTES}\n\n{shared}", bot.role());
+        let role = format!("{}{others}{NOTES}{}\n\n{shared}", bot.role(), sandbox::folders_note(&bot.folders));
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
             send_role,
             bot: id,
-            mount: bot.folder.clone().unwrap_or(scratch),
+            folders: bot.folders.clone(),
+            scratch,
             memory,
             prompt,
             role: role.clone(),
@@ -1024,11 +1036,15 @@ impl Eggbot {
         let targets = handoff::mentions(&reply, &names, from);
         let handed = !targets.is_empty();
         let Some(sender) = self.bots.iter().find(|b| b.id == from) else { return false };
-        let (from_name, color, folder) = (sender.name.clone(), sender.color(), sender.folder.clone());
+        let (from_name, color) = (sender.name.clone(), sender.color());
+        let from_mounts: Vec<(PathBuf, String)> = sender.folders.iter().map(|f| (f.path.clone(), f.dest())).collect();
         let next = hops + 1;
         for to in targets {
             let Some(target) = self.bots.iter_mut().find(|b| b.id == to) else { continue };
-            let prompt = handoff::prompt(&from_name, &reply, folder.is_some() && folder == target.folder);
+            let to_mounts: Vec<(PathBuf, String)> = target.folders.iter().map(|f| (f.path.clone(), f.dest())).collect();
+            let mine: Vec<(&std::path::Path, &str)> = from_mounts.iter().map(|(p, d)| (p.as_path(), d.as_str())).collect();
+            let theirs: Vec<(&std::path::Path, &str)> = to_mounts.iter().map(|(p, d)| (p.as_path(), d.as_str())).collect();
+            let prompt = handoff::prompt(&from_name, &reply, &mine, &theirs);
             let paused = next > handoff::MAX_HOPS;
             target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false });
             let to_name = target.name.clone();
@@ -1268,7 +1284,7 @@ impl Eggbot {
         cx.notify();
     }
 
-    /// Deletes the bot, its container and its scratch folder; never a mounted project folder.
+    /// Deletes the bot, its container and its scratch folder; never a mounted folder.
     fn delete(&mut self, id: usize, cx: &mut Context<Self>) {
         let Some(i) = self.bots.iter().position(|b| b.id == id) else { return };
         if let Some(run) = &self.bots[i].run {
@@ -1289,23 +1305,44 @@ impl Eggbot {
     }
 
     fn pick_folder(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Mount".into()) });
+        let Some(bot) = self.bots.get(self.selected) else { return };
+        if bot.folders.len() >= sandbox::MAX_MOUNTS {
+            self.folder_error = Some(format!("A bot can mount at most {} folders.", sandbox::MAX_MOUNTS));
+            cx.notify();
+            return;
+        }
+        let id = bot.id;
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some("Mount folders".into()) });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(mut paths))) = picked.await
-                && let Some(path) = paths.pop()
-            {
-                this.update(cx, |this, cx| {
-                    if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
-                        b.folder = Some(path);
-                    }
-                    this.save();
-                    cx.notify();
-                })
-                .ok();
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            if paths.is_empty() {
+                return;
             }
+            this.update(cx, |this, cx| {
+                let show = this.bots.get(this.selected).is_some_and(|b| b.id == id);
+                if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
+                    let err = sandbox::add_mounts(&mut b.folders, &paths).err();
+                    if show {
+                        this.folder_error = err;
+                    }
+                }
+                this.save();
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
+    }
+
+    fn remove_folder(&mut self, id: usize, index: usize, cx: &mut Context<Self>) {
+        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
+            if index < bot.folders.len() {
+                bot.folders.remove(index);
+            }
+        }
+        self.folder_error = None;
+        self.save();
+        cx.notify();
     }
 
     /// The login finishes in Terminal; check every 5 s for 5 minutes and tell the user when it works.
@@ -1616,7 +1653,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::Saved;
+    use super::{Bot, Saved};
 
     #[test]
     fn sidebar_stays_open_when_state_has_no_flag() {
@@ -1630,5 +1667,21 @@ mod tests {
         let saved: Saved = serde_json::from_str(r#"{"next_id":1,"bots":[],"sidebar_open":false,"sidebar_w":300.0}"#).unwrap();
         assert!(!saved.sidebar_open);
         assert_eq!(saved.sidebar_w, 300.);
+    }
+
+    #[test]
+    fn legacy_folder_field_becomes_a_mount() {
+        let dir = std::env::temp_dir().join(format!("eggbot-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = format!(r#"{{"id":1,"name":"Reviewer","preset":0,"folder":{},"msgs":[]}}"#, serde_json::to_string(&dir).unwrap());
+        let mut bot: Bot = serde_json::from_str(&json).unwrap();
+        assert!(bot.folders.is_empty());
+        crate::sandbox::adopt_legacy(&mut bot.folders, bot.folder.take());
+        let saved = serde_json::to_value(&bot).unwrap();
+        assert!(saved.get("folder").is_none());
+        let path = bot.folders[0].path.to_string_lossy();
+        assert_eq!(saved["folders"][0]["path"].as_str(), Some(path.as_ref()));
+        assert_eq!(saved["folders"][0]["name"], bot.folders[0].name);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

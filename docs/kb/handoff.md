@@ -13,3 +13,13 @@ Code: `src/handoff.rs` (pure: mention parsing, roster, prompt, queue resume; `ca
 - Schedules that were queued behind a busy bot share this queue, so they survive too. A schedule that had already started does not restart.
 
 Observed 2026-09-30 (live test): casual mentions ("@Implementer got my message") also trigger — expected with the "anywhere" rule. Bots tend to stop chains themselves once a task is done.
+
+## Folders in the handoff
+
+`handoff::prompt` compares host paths and names container paths (`/work/<name>`). Scratch folders are per bot and never count as shared. Either bot with no folders gets "They work in a different folder; you cannot see their files."
+
+- Same host path: "You share /work/docs with them…". If the names differ (`/work/docs` vs `/work/docs-2`), both are written.
+- The receiver's folder is inside the sender's: the sender can see those files; the receiver cannot see the rest. The closest parent is the one named.
+- The sender's folder is inside the receiver's: the reverse.
+- A nested path that sits under a folder both already share is not repeated.
+- No shared or nested path: the "different folder" line.

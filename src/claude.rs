@@ -86,7 +86,10 @@ impl Handle {
 
 pub struct Turn {
     pub bot: usize,
-    pub mount: PathBuf,
+    /// User-picked folders, each mounted at `/work/<name>`. Empty: `scratch` is mounted at `/work`.
+    pub folders: Vec<sandbox::Mount>,
+    /// Used at `/work` only when `folders` is empty.
+    pub scratch: PathBuf,
     /// The bot's own folder for NOTES.md, mounted at /memory.
     pub memory: PathBuf,
     pub prompt: String,
@@ -126,9 +129,10 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 
 /// Ok(true) when claude reported its own result (success or error).
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
-    let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
+    let name = sandbox::ensure(t.bot, &t.folders, &t.scratch, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
+    let workdir = sandbox::cwd(&t.folders);
     let mut cmd = Command::new("docker");
-    cmd.args(["exec", "-e", &sandbox::tz(), &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+    cmd.args(["exec", "-e", &sandbox::tz(), "-w", &workdir, &name, "claude", "-p", &t.prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
         .args(["--append-system-prompt", &t.role])
         // clean bots with full power inside their own machine; no tools that reach outside it
         .args(["--setting-sources", "project,local", "--strict-mcp-config", "--permission-mode", "bypassPermissions"])

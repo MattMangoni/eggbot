@@ -1,5 +1,6 @@
 //! Everything eggbot draws. State and behaviour live in `main.rs`.
 
+use std::path::Path;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -67,6 +68,14 @@ fn soft_shadow(p: Palette) -> Vec<BoxShadow> {
     }
     let shadow = |alpha: f32, y: f32, blur: f32, spread: f32| BoxShadow { color: hsla(0., 0., 0., alpha), offset: point(px(0.), px(y)), blur_radius: px(blur), spread_radius: px(spread), inset: false };
     vec![shadow(0.03, 1., 2., 0.), shadow(0.05, 8., 28., -6.)]
+}
+
+fn short_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && text.starts_with(&home) => format!("~{}", &text[home.len()..]),
+        _ => text,
+    }
 }
 
 /// A quiet text link with an icon (the row under the composer).
@@ -374,9 +383,76 @@ impl Eggbot {
             .with_animation("menu-in", Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
 
+    /// Header chips: each mounted folder, with remove, and a button that adds more.
+    fn folder_chips(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let id = bot.id;
+        let chips = bot.folders.iter().enumerate().map(|(i, f)| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_1()
+                .h(px(24.))
+                .pl_2()
+                .pr(px(2.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(p.line)
+                .text_xs()
+                .text_color(p.ink)
+                .child(Icon::new(IconName::Folder).size_3().text_color(p.muted))
+                .child(div().max_w(px(220.)).truncate().child(short_path(&f.path)))
+                .child(
+                    div()
+                        .id(("unmount", id * 32 + i))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(18.))
+                        .rounded(px(4.))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(p.hover).text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.remove_folder(id, i, cx);
+                        }))
+                        .child(Icon::new(IconName::Close).size_3()),
+                )
+        });
+        div()
+            .id("folder-chips")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_x_scroll()
+            .flex()
+            .items_center()
+            .gap_1()
+            .children(chips)
+            .child(
+                div()
+                    .id("add-folder")
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(24.))
+                    .px_2()
+                    .rounded(px(6.))
+                    .text_xs()
+                    .text_color(p.muted)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.hover).text_color(p.ink))
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx)))
+                    .child(Icon::new(IconName::Plus).size_3())
+                    .child(if bot.folders.is_empty() { "Add folder" } else { "Add" }),
+            )
+    }
+
     fn topbar(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
-        let folder = bot.folder.as_ref().map(|f| f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string()));
         div()
             .h(px(44.))
             .flex_none()
@@ -414,8 +490,7 @@ impl Eggbot {
                     .child(bot.name.clone())
                     .child(Icon::new(IconName::ChevronDown).size_3().text_color(p.muted)),
             )
-            .when_some(folder, |d, f| d.child(div().text_sm().text_color(p.muted).child("/")).child(div().px_2().text_sm().text_color(p.muted).child(f)))
-            .child(div().flex_1())
+            .child(self.folder_chips(bot, cx))
             .child(div().mr_2().child(self.find_bar(cx)))
             .when(bot.context.1 > 0, |d| {
                 let used = bot.context.0 as f32 / bot.context.1 as f32;
@@ -540,8 +615,6 @@ impl Eggbot {
             1 => "1 schedule".to_string(),
             n => format!("{n} schedules"),
         };
-        let folder = bot.folder.as_ref().map_or("No project folder".to_string(), |f| f.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~"));
-
         div()
             .flex()
             .flex_col()
@@ -578,7 +651,7 @@ impl Eggbot {
                     .gap_1()
                     .px_2p5()
                     .pt_1()
-                    .child(link("folder", p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))).child(Icon::new(IconName::Folder).size_3()).child(folder))
+                    .child(link("folder", p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))).child(Icon::new(IconName::Folder).size_3()).child("Add folder"))
                     .child(
                         link("clock", p)
                             .when(self.sched_open, |d| d.bg(p.hover).text_color(p.ink))
@@ -596,6 +669,7 @@ impl Eggbot {
                             .child(schedules),
                     )
                     .child(div().flex_1())
+                    .when_some(self.folder_error.clone(), |d, e| d.child(div().min_w_0().text_xs().text_color(p.err).truncate().child(e)))
                     .children(note),
             )
     }
