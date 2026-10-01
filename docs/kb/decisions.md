@@ -59,6 +59,8 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Settings | ⌘, panel in the window: Start at login switch + "Instructions for all bots" | Matteo chose one Settings panel |
 | Start at login | SMAppService.mainApp; a login launch starts hidden (menu bar egg only), detected by the `oapp` Apple event with `lgit` | Matteo chose menu bar only |
 | Shared instructions | One text for all bots on both providers, default = the old style line; NOTES rule stays fixed; Codex BASE plumbing not editable | Editing BASE could break role delivery |
+| Sign-in clash | Retry the turn once after 5 s on "process is refreshing it" | Matteo chose retry over one login per bot |
+| Long chats | GPUI virtual `list` (`ListState`, bottom-aligned, follows the tail): only rows on screen plus 800px overdraw are drawn; keep all on disk | 3,000 messages: 50–95% CPU before, ~2% after, smooth scrolling |
 
 ## Phases
 

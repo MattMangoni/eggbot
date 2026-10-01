@@ -426,20 +426,14 @@ impl Eggbot {
                 .child(div().w_full().max_w(px(READ_W)).child(self.composer(bot, cx)))
                 .into_any_element()
         } else {
-            let msgs = bot.msgs.iter().enumerate().map(|(i, m)| self.message(bot, i, m, cx));
+            // a virtual list: only the messages on screen (plus some overdraw) are drawn
+            let msgs = list(self.list.clone(), cx.processor(|this: &mut Self, ix: usize, _, cx| this.row(ix, cx))).flex_1();
             div()
                 .flex_1()
                 .min_h_0()
                 .flex()
                 .flex_col()
-                .child(
-                    div()
-                        .id(("msgs", bot.id))
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .child(div().flex().flex_col().gap_4().px_6().py_6().max_w(px(READ_W + 48.)).mx_auto().w_full().children(msgs).when(bot.waiting(), |d| d.child(self.typing(bot)))),
-                )
+                .child(msgs)
                 .child(div().px_6().pb_4().child(div().max_w(px(READ_W)).mx_auto().w_full().child(self.composer(bot, cx))))
                 .into_any_element()
         };
@@ -557,6 +551,18 @@ impl Eggbot {
                     .child(div().flex_1())
                     .children(note),
             )
+    }
+
+    /// One row of the chat list: message `ix`, or the typing indicator after the last message.
+    fn row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(bot) = self.bots.get(self.selected) else { return div().into_any_element() };
+        let el = match bot.msgs.get(ix) {
+            Some(m) => self.message(bot, ix, m, cx),
+            None if bot.waiting() => self.typing(bot).into_any_element(),
+            None => div().into_any_element(),
+        };
+        let last = ix == bot.msgs.len();
+        div().w_full().flex().justify_center().px_6().pt(px(if ix == 0 { 24. } else { 16. })).when(last, |d| d.pb_6()).child(div().w_full().max_w(px(READ_W)).child(el)).into_any_element()
     }
 
     fn panel(&self) -> Div {
@@ -901,6 +907,7 @@ impl Render for Eggbot {
         if self.selects_stale {
             self.sync_selects(window, cx);
         }
+        self.sync_list();
         // no background here: the window is blurred behind the translucent sidebar
         div()
             .size_full()

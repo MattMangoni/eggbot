@@ -393,7 +393,10 @@ struct Eggbot {
     active: bool,
     /// Dragging the sidebar's edge.
     resizing: bool,
-    scroll: ScrollHandle,
+    /// The chat's virtual list: one row per message of the selected bot, plus the typing row.
+    list: ListState,
+    /// The bot whose messages `list` holds.
+    list_bot: Option<usize>,
 }
 
 impl Eggbot {
@@ -494,11 +497,11 @@ impl Eggbot {
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, resizing: false, input, scroll: ScrollHandle::new() };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.shared);
-                this.scroll.scroll_to_bottom();
             }
             _ => {
                 for i in 0..3 {
@@ -672,7 +675,7 @@ impl Eggbot {
         self.edit_open = false;
         self.sched_open = false;
         self.settings_open = false;
-        self.scroll.scroll_to_bottom();
+        self.list.scroll_to_end();
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -700,6 +703,23 @@ impl Eggbot {
     fn set_login(&mut self, on: bool, cx: &mut Context<Self>) {
         self.login_error = login::set(on).err();
         cx.notify();
+    }
+
+    /// Tells the chat list about added or removed messages; visible rows re-measure themselves every frame.
+    fn sync_list(&mut self) {
+        let Some(bot) = self.bots.get(self.selected) else { return };
+        let (count, old) = (bot.msgs.len() + 1, self.list.item_count());
+        if self.list_bot != Some(bot.id) {
+            self.list_bot = Some(bot.id);
+            self.list.reset(count);
+            self.list.scroll_to_end();
+        } else if count > old {
+            // new messages go before the typing row
+            self.list.splice(old - 1..old - 1, count - old);
+        } else if count < old {
+            // ponytail: removals are assumed at the tail (empty replies, quiet runs); reset if middle removals appear
+            self.list.splice(count - 1..old - 1, 0);
+        }
     }
 
     /// The selected bot has been seen.
@@ -788,7 +808,10 @@ impl Eggbot {
         })
         .detach();
         self.save();
-        self.scroll.scroll_to_bottom();
+        // a new turn on screen jumps to the end; replies then follow the tail while you stay at the bottom
+        if self.bots.get(self.selected).is_some_and(|b| b.id == id) {
+            self.list.scroll_to_end();
+        }
         cx.notify();
     }
 
@@ -1037,7 +1060,6 @@ impl Eggbot {
             }
             _ => {}
         }
-        self.scroll.scroll_to_bottom();
         cx.notify();
     }
 
