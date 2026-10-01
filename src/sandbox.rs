@@ -1,4 +1,4 @@
-//! One long-lived Docker container per bot, on Colima.
+//! One long-lived Docker container per bot, on any Docker engine (OrbStack, Docker Desktop, Colima).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
@@ -37,11 +37,37 @@ fn docker(args: &[&str]) -> Result<String, String> {
     run(Command::new("docker").args(args))
 }
 
+/// Starts the engine behind the active Docker context, then waits until it answers.
+fn wake() -> Result<(), String> {
+    let context = docker(&["context", "show"]).unwrap_or_default();
+    let app = |name: &str| ["/Applications", &format!("{}/Applications", std::env::var("HOME").unwrap_or_default())].iter().any(|d| Path::new(&format!("{d}/{name}.app")).exists());
+    let open = |name: &str| run(Command::new("open").args(["-ga", name]));
+    let colima = |profile: &str| run(Command::new("colima").args(["start", profile]));
+    match context.as_str() {
+        "orbstack" => open("OrbStack"),
+        "desktop-linux" => open("Docker"),
+        c if c.starts_with("colima") => colima(c.strip_prefix("colima-").unwrap_or("default")),
+        // `colima stop` resets the context to "default", so look for an installed engine
+        _ if run(Command::new("colima").arg("version")).is_ok() => colima("default"),
+        _ if app("OrbStack") => open("OrbStack"),
+        _ if app("Docker") => open("Docker"),
+        _ => Err("no Docker engine found; install OrbStack, Docker Desktop or Colima".into()),
+    }
+    .map_err(|e| format!("Could not start Docker: {e}. Start it yourself and send again."))?;
+    for _ in 0..45 {
+        if docker(&["info"]).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    Err("Docker did not start within 90 seconds".into())
+}
+
 /// Docker is up and the bot image exists.
 pub fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
     if docker(&["info"]).is_err() {
-        status("Waking the sandbox…");
-        run(Command::new("colima").arg("start")).map_err(|e| format!("Could not start Colima: {e}"))?;
+        status("Starting Docker…");
+        wake()?;
     }
     let image = image();
     if docker(&["image", "inspect", &image]).is_err() {

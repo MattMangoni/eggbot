@@ -6,7 +6,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 |---|---|---|
 | Platform | macOS first, keep code portable | GPUI has no iOS/Android |
 | Model access | Official `claude -p --output-format stream-json` and `codex exec --json` | No API keys, no token reuse |
-| Sandbox | One Docker container per bot (Colima) | |
+| Sandbox | One Docker container per bot, on any engine (OrbStack, Docker Desktop, Colima) | Matteo: Colima is not required; his Mac mini runs OrbStack |
 | Always-on | Runs when window closes (menu bar), scheduled tasks, persistent memory | Proactive messages deferred |
 | Teamwork | Independent bots + automatic handoff: `@Name` anywhere in a reply sends the whole reply to that bot | Decided 2026-09-30; no lead/dispatcher bot |
 | Workspace | Host project folder mounted into the bot container | |

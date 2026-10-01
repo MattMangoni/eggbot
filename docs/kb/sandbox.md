@@ -1,4 +1,4 @@
-# Bot sandbox (Docker on Colima)
+# Bot sandbox (Docker: OrbStack, Docker Desktop or Colima)
 
 Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_str!`, tag = hash of the file).
 
@@ -32,8 +32,12 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 
 ## Launched from Finder
 
-Apps opened from Finder/Dock get `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `docker`/`colima` (Homebrew) are not found. `main()` prepends `/opt/homebrew/bin:/usr/local/bin` before GPUI starts. The docker context in `~/.docker` still works (HOME is set).
+Apps opened from Finder/Dock get `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `docker`/`colima` are not found. `main()` prepends `/opt/homebrew/bin:/usr/local/bin:~/.orbstack/bin` before GPUI starts. The docker context in `~/.docker` still works (HOME is set).
 
 ## Time zone
 
 Containers run in UTC. Each `docker exec` gets `-e TZ=<zone>` from the Mac's `/etc/localtime` link (`sandbox::tz()`), so bots see local dates and a move to another zone applies on the next turn. The image already has `/usr/share/zoneinfo`.
+
+## Starting Docker
+
+eggbot needs only the `docker` CLI (no compose). When `docker info` fails, `sandbox::wake` starts the engine behind `docker context show`: `orbstack` → `open -ga OrbStack`, `desktop-linux` → `open -ga Docker`, `colima[-profile]` → `colima start <profile>`. `colima stop` resets the context to `default`, so for `default` it tries an installed engine: Colima, then OrbStack, then Docker Desktop. Then it waits up to 90 s for `docker info`. Tested with Colima stopped; OrbStack and Docker Desktop paths not tested here.

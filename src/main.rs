@@ -1289,10 +1289,10 @@ fn set_dock_icon(visible: bool) {
 }
 
 fn main() {
-    // apps opened from Finder get a bare PATH; docker and colima live in Homebrew
-    let path = std::env::var("PATH").unwrap_or_default();
+    // apps opened from Finder get a bare PATH; docker lives in Homebrew, /usr/local/bin or OrbStack's own folder
+    let (path, home) = (std::env::var("PATH").unwrap_or_default(), std::env::var("HOME").unwrap_or_default());
     // SAFETY: still single-threaded, before GPUI starts
-    unsafe { std::env::set_var("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}")) };
+    unsafe { std::env::set_var("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{home}/.orbstack/bin:{path}")) };
     gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
         // opened by macOS at login: start quietly, with only the menu bar egg

@@ -45,7 +45,7 @@ pub struct Window {
 
 #[derive(Debug, PartialEq)]
 pub enum Ev {
-    /// Sandbox progress before the agent starts (waking Colima, building the image…).
+    /// Sandbox progress before the agent starts (starting Docker, building the image…).
     Status(String),
     Session(String),
     TextStart,

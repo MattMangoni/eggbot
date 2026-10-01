@@ -28,7 +28,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/tray.rs` — menu bar egg icon (unread badge) and menu.
 - `src/notify.rs` — macOS notifications (bundle only); a click opens the bot.
 - `src/login.rs` — start at login (SMAppService, bundle only) and login-launch detection.
-- `src/sandbox.rs` — Colima/Docker: bot image, one container per bot, sign-in terminal.
+- `src/sandbox.rs` — Docker (any engine: OrbStack, Docker Desktop, Colima): bot image, one container per bot, sign-in terminal.
 - `docker/bot.Dockerfile` — the bot machine image.
 - `scripts/icon.swift` — draws the app icon (used by `bundle.sh`).
 - `src/egg.rs` — small vector egg avatar (still, or wobbling while working).

@@ -18,7 +18,7 @@ Built in Rust with [GPUI](https://www.gpui.rs).
 ## Requirements
 
 - macOS 13 or later
-- [Colima](https://github.com/abiosoft/colima) (or another Docker engine) and the `docker` CLI, from Homebrew
+- A Docker engine with the `docker` CLI: [OrbStack](https://orbstack.dev), [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [Colima](https://github.com/abiosoft/colima). eggbot starts it when needed.
 - A Claude Pro/Max plan and/or a ChatGPT plan with Codex
 - Rust (stable) and Xcode Command Line Tools, to build
 
