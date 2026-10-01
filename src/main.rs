@@ -7,6 +7,7 @@ mod room;
 mod notify;
 mod sandbox;
 mod schedule;
+mod skills;
 mod tray;
 mod ui;
 mod usage;
@@ -302,6 +303,9 @@ struct Bot {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// Copied from the preset at hatch, then owned by this bot.
+    #[serde(default)]
+    skills: Vec<skills::Skill>,
     #[serde(skip)]
     run: Option<Arc<claude::Handle>>,
     #[serde(skip)]
@@ -452,6 +456,12 @@ struct Eggbot {
     sched_prompt: Entity<InputState>,
     sched_value: Entity<InputState>,
     sched_error: Option<String>,
+    skills_open: bool,
+    skill_name: Entity<InputState>,
+    skill_body: Entity<TextareaState>,
+    /// Index of the skill the form is editing. None means the form adds a new one.
+    skill_at: Option<usize>,
+    skill_error: Option<String>,
     edit_open: bool,
     edit_name: Entity<InputState>,
     edit_role: Entity<TextareaState>,
@@ -533,6 +543,12 @@ impl Eggbot {
         input.update(cx, |s, cx| s.focus(window, cx));
         let sched_prompt = cx.new(|cx| InputState::new(window, cx).placeholder("What should it do? e.g. Review yesterday's commits"));
         let sched_value = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
+        let skill_name = cx.new(|cx| InputState::new(window, cx).placeholder("Skill name, e.g. Review a diff"));
+        let skill_body = cx.new(|cx| {
+            let mut body = TextareaState::new(window, cx).placeholder("The steps this bot should follow.");
+            body.set_auto_grow(3, 8, cx);
+            body
+        });
         let edit_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
         let edit_shared = cx.new(|cx| {
             let mut shared = TextareaState::new(window, cx).placeholder("e.g. Reply in Italian. Never push to git.");
@@ -614,6 +630,12 @@ impl Eggbot {
             })
             .detach();
         }
+        cx.subscribe_in(&skill_name, window, |this, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                this.save_skill(window, cx);
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             // first check soon after launch, so runs missed while eggbot was closed happen once
             let mut wait = Duration::from_secs(3);
@@ -641,7 +663,7 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() => {
@@ -795,6 +817,8 @@ impl Eggbot {
 
     fn hatch(&mut self, preset: usize) {
         self.leave_room();
+        self.skills_open = false;
+        self.skill_at = None;
         let base = PRESETS[preset].name;
         let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
         let name = (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap();
@@ -813,6 +837,8 @@ impl Eggbot {
             color: None,
             model: None,
             effort: None,
+            // copied by preset name, so this bot keeps its own list after hatch
+            skills: skills::defaults(PRESETS[preset].name),
             run: None,
             status: None,
             stopped: false,
@@ -842,6 +868,7 @@ impl Eggbot {
         self.confirm_delete = None;
         self.edit_open = false;
         self.sched_open = false;
+        self.skills_open = false;
         self.settings_open = false;
         self.folder_error = None;
         (self.find_open, self.find_hits) = (false, vec![]);
@@ -859,7 +886,7 @@ impl Eggbot {
         let (throttle, pause) = (usage::percent(self.throttle).to_string(), usage::percent(self.pause).to_string());
         self.limit_throttle.update(cx, |s, cx| s.set_value(throttle, window, cx));
         self.limit_pause.update(cx, |s, cx| s.set_value(pause, window, cx));
-        (self.settings_open, self.edit_open, self.sched_open, self.login_error, self.settings_error) = (true, false, false, None, None);
+        (self.settings_open, self.edit_open, self.sched_open, self.skills_open, self.login_error, self.settings_error) = (true, false, false, false, None, None);
         cx.notify();
     }
 
@@ -1064,7 +1091,7 @@ impl Eggbot {
                 eprintln!("eggbot: could not create {}: {e}", dir.display());
             }
         }
-        let role = format!("{}{others}{NOTES}{}\n\n{shared}", bot.role(), sandbox::folders_note(&bot.folders));
+        let role = skills::role_text(bot.role(), &bot.skills, &others, NOTES, &sandbox::folders_note(&bot.folders), &shared);
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
@@ -1288,6 +1315,7 @@ impl Eggbot {
         self.edit_role.update(cx, |s, cx| s.set_value(role, window, cx));
         self.edit_open = true;
         self.sched_open = false;
+        self.skills_open = false;
         self.settings_open = false;
         self.edit_error = None;
         self.selects_stale = true;
@@ -1326,6 +1354,65 @@ impl Eggbot {
             self.save();
             cx.notify();
         }
+    }
+
+    fn toggle_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.skills_open = !self.skills_open;
+        (self.sched_open, self.settings_open, self.edit_open) = (false, false, false);
+        if self.skills_open {
+            self.clear_skill_form(window, cx);
+            self.skill_name.update(cx, |s, cx| s.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn clear_skill_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.skill_at = None;
+        self.skill_error = None;
+        self.skill_name.update(cx, |s, cx| s.set_value("", window, cx));
+        self.skill_body.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+
+    fn edit_skill(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(skill) = self.bots.get(self.selected).and_then(|b| b.skills.get(index)).cloned() else { return };
+        self.skill_at = Some(index);
+        self.skill_error = None;
+        self.skill_name.update(cx, |s, cx| {
+            s.set_value(skill.name, window, cx);
+            s.focus(window, cx);
+        });
+        self.skill_body.update(cx, |s, cx| s.set_value(skill.body, window, cx));
+        cx.notify();
+    }
+
+    /// Writes the form onto this bot's own list. The next turn sends it with the role.
+    fn save_skill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.skill_name.read(cx).value().to_string();
+        let body = self.skill_body.read(cx).value().to_string();
+        let at = self.skill_at;
+        let Some(bot) = self.bots.get_mut(self.selected) else { return };
+        match skills::upsert(&mut bot.skills, at, &name, &body) {
+            Ok(()) => {
+                self.save();
+                self.clear_skill_form(window, cx);
+            }
+            Err(e) => self.skill_error = Some(e.into()),
+        }
+        cx.notify();
+    }
+
+    fn remove_skill(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.get_mut(self.selected) else { return };
+        if !skills::remove(&mut bot.skills, index) {
+            return;
+        }
+        if self.skill_at == Some(index) {
+            self.clear_skill_form(window, cx);
+        } else if let Some(at) = self.skill_at.filter(|at| *at > index) {
+            self.skill_at = Some(at - 1);
+        }
+        self.save();
+        cx.notify();
     }
 
     fn continue_chain(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
@@ -1499,7 +1586,7 @@ impl Eggbot {
         }
         self.open_room = Some(id);
         (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
-        (self.menu_open, self.edit_open, self.sched_open, self.settings_open) = (false, false, false, false);
+        (self.menu_open, self.edit_open, self.sched_open, self.skills_open, self.settings_open) = (false, false, false, false, false);
         (self.find_open, self.find_hits) = (false, vec![]);
         self.room_title.update(cx, |s, cx| {
             s.set_value(title, window, cx);
@@ -1850,7 +1937,7 @@ impl Eggbot {
         }
         let unknown = Check::Unknown;
         self.setup = Some(Setup { engine: unknown.clone(), running: unknown.clone(), image: unknown.clone(), claude: unknown.clone(), codex: unknown });
-        (self.settings_open, self.edit_open, self.sched_open) = (false, false, false);
+        (self.settings_open, self.edit_open, self.sched_open, self.skills_open) = (false, false, false, false);
         cx.notify();
         // re-check every few seconds while the checklist is open; installs and sign-ins finish outside eggbot
         cx.spawn(async move |this, cx| {
@@ -1987,6 +2074,24 @@ mod persist_tests {
         let bot: Bot = serde_json::from_str(old).unwrap();
         assert!(bot.queue.is_empty());
         assert!(bot.current.is_none());
+        // a bot saved before skills stays empty; preset defaults are applied only at hatch
+        assert!(bot.skills.is_empty());
+        assert!(!skills::defaults("Reviewer").is_empty());
+    }
+
+    #[test]
+    fn skills_round_trip_beside_queue_and_folders() {
+        let raw = r#"{"id":1,"name":"Reviewer","preset":0,"sandbox_session":null,"msgs":[],"folders":[{"path":"/tmp/proj","name":"proj"}],"queue":[{"prompt":"ship it","hops":1,"fresh":false,"handoff":true}],"skills":[{"name":"Check","body":"Run tests."}]}"#;
+        let bot: Bot = serde_json::from_str(raw).unwrap();
+        assert_eq!(bot.skills.len(), 1);
+        assert_eq!(bot.skills[0].body, "Run tests.");
+        assert_eq!(bot.queue[0].prompt, "ship it");
+        assert_eq!(bot.folders[0].name, "proj");
+        let again: Bot = serde_json::from_str(&serde_json::to_string(&bot).unwrap()).unwrap();
+        assert_eq!(again.skills, bot.skills);
+        assert_eq!(again.queue[0].prompt, "ship it");
+        assert_eq!(again.folders[0].name, "proj");
+        assert!(again.current.is_none());
     }
 
     #[test]
@@ -1995,6 +2100,7 @@ mod persist_tests {
         let saved: Saved = serde_json::from_str(raw).unwrap();
         assert_eq!(usage::percent(saved.throttle), 90);
         assert_eq!(usage::percent(saved.pause), 95);
+        assert!(saved.bots[0].skills.is_empty());
         assert!(saved.bots[0].queue[0].inflight());
         assert_eq!(saved.bots[0].current.as_ref().map(|p| p.prompt.as_str()), Some("look"));
         assert_eq!(saved.bots[0].folders[0].name, "proj");
@@ -2004,6 +2110,7 @@ mod persist_tests {
         assert_eq!(again.bots[0].queue[0].prompt, "ship it");
         assert_eq!(again.bots[0].current.as_ref().unwrap().hops, 1);
         assert_eq!(again.bots[0].folders[0].name, "proj");
+        assert!(again.bots[0].skills.is_empty());
         assert!(again.bots[0].folder.is_none());
         assert_eq!(usage::percent(again.pause), 95);
         assert!(saved.rooms.is_empty());

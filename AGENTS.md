@@ -27,6 +27,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/room.rs` — room roster and kickoff prompt (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
 - `src/usage.rs` — plan-usage guard: throttle and pause thresholds (tested).
+- `src/skills.rs` — preset default skills, validation, and the role section (tested).
 - `src/tray.rs` — menu bar egg icon (unread badge) and menu.
 - `src/notify.rs` — macOS notifications (bundle only); a click opens the bot.
 - `src/login.rs` — start at login (SMAppService, bundle only) and login-launch detection.
