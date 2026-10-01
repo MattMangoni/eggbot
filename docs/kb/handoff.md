@@ -24,3 +24,11 @@ Observed 2026-09-30 (live test): casual mentions ("@Implementer got my message")
 - The sender's folder is inside the receiver's: the reverse.
 - A nested path that sits under a folder both already share is not repeated.
 - No shared or nested path: the "different folder" line.
+
+## Rooms
+
+Code: `src/room.rs` (roster edits, kickoff prompt; `cargo test`), wiring in `src/main.rs` (`start_room`, `show_room`).
+
+A room is not a new kind of bot. It stores a title, a kickoff, and bot ids in `state.json`, plus which member is the facilitator and whether the room is unread.
+
+Start delivers the kickoff to the facilitator only, as `Pending::handoff` with hops 0, through `deliver`. A busy facilitator, a pause, or a throttle keeps it on the same persisted queue. `pump_queues` starts it only when the bot is idle, Docker is up, and `may_start` is true. A quit or crash puts an in-flight kickoff back on the queue. Hops stay 0, so the kickoff does not use up the chain limit. The facilitator's reply can `@Name` the other members; those are ordinary handoffs. There is no lead bot and no combined transcript — each bot's chat stays its own. A "Room · …" card in the facilitator's chat opens the room.
