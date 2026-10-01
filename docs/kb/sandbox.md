@@ -27,7 +27,7 @@ Code: `src/sandbox.rs`, image: `docker/bot.Dockerfile` (embedded with `include_s
 
 ## Open
 
-- Token refresh race when several containers share one credentials file.
+- Token refresh race when several containers share one credentials file: see `auth.md` (lock + one retry).
 - Host-created Claude sessions cannot resume in containers (different config dir): the saved field was renamed to `sandbox_session` so old ids are dropped.
 
 ## Launched from Finder

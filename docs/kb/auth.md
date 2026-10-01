@@ -21,7 +21,8 @@ Credential facts:
 - macOS: credentials live in the Keychain, so mounting `~/.claude` into a container does not carry the login.
 - Linux (containers): `~/.claude/.credentials.json`, mode 0600.
 - `--bare` mode ignores `CLAUDE_CODE_OAUTH_TOKEN`.
-- Open question: shared volume + concurrent containers may race on token refresh. Verify in Phase 3.
+- Shared volume + concurrent containers: Claude Code uses a refresh lock across processes; 2.1.285 fixed a race in recovering that lock (our image has 2.1.286). The docs still list a transient error, "another Claude Code process is refreshing it". eggbot retries such a turn once after 5 s (`Bot.retried`); a second failure shows as a normal error with the "needs you" notification. Codex: not documented, no retry.
+- `claude setup-token` is the documented container path, but the token would pass through eggbot, which our rules forbid.
 
 ## Codex
 

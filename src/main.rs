@@ -286,6 +286,12 @@ struct Bot {
     /// Something arrived that the user has not seen yet.
     #[serde(default)]
     unread: bool,
+    /// The running turn's (prompt, hops, fresh), to run it again after a sign-in clash.
+    #[serde(skip)]
+    current: Option<(String, u32, bool)>,
+    /// The running turn is already that one retry.
+    #[serde(skip)]
+    retried: bool,
 }
 
 impl Bot {
@@ -648,6 +654,8 @@ impl Eggbot {
             pending_role: None,
             context: (0, 0),
             unread: false,
+            current: None,
+            retried: false,
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -739,6 +747,7 @@ impl Eggbot {
         bot.stopped = false;
         bot.hops = hops;
         bot.fresh_turn = fresh;
+        bot.current = Some((prompt.clone(), hops, fresh));
         // separate folders, so a bot without a project never sees its notes inside /work
         let home = data_dir().join("bots").join(id.to_string());
         let (scratch, memory) = (home.join("work"), home.join("memory"));
@@ -967,6 +976,21 @@ impl Eggbot {
             Ev::Done { error } => {
                 bot.run = None;
                 bot.msgs.retain(|m| !matches!(m, Msg::Bot(s) if s.is_empty()));
+                // documented transient error when bots renew the shared Claude login at the same moment
+                let clash = !bot.stopped && error.as_deref().is_some_and(|e| e.contains("process is refreshing it"));
+                if clash && !std::mem::take(&mut bot.retried)
+                    && let Some((prompt, hops, fresh)) = bot.current.clone()
+                {
+                    bot.retried = true;
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_secs(5)).await;
+                        this.update(cx, |this, cx| this.deliver(id, prompt, hops, fresh, cx)).ok();
+                    })
+                    .detach();
+                    cx.notify();
+                    return;
+                }
+                bot.retried = false;
                 let ok = !bot.stopped && error.is_none();
                 let failed = error.clone().filter(|_| !bot.stopped);
                 match (bot.stopped, error) {
