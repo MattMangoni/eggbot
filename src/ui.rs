@@ -626,7 +626,8 @@ impl Eggbot {
         let panels = div()
             .when(self.settings_open, |d| d.child(self.settings(cx)))
             .when(self.edit_open, |d| d.child(self.editor(bot, cx)))
-            .when(self.sched_open, |d| d.child(self.schedules(bot, cx)));
+            .when(self.sched_open, |d| d.child(self.schedules(bot, cx)))
+            .when(self.skills_open, |d| d.child(self.skills(bot, cx)));
 
         let body = if bot.msgs.is_empty() {
             div()
@@ -706,6 +707,11 @@ impl Eggbot {
             Some(e) => link("codex-retry", p).child(format!("Codex: {e} · Retry")).on_click(cx.listener(|this, _, _, cx| this.refresh_codex(1, cx))).into_any_element(),
         });
 
+        let skills_label = match bot.skills.len() {
+            0 => "Skills".to_string(),
+            1 => "1 skill".to_string(),
+            n => format!("{n} skills"),
+        };
         let waiting = self.schedules_wait(bot) && bot.schedules.iter().any(|s| s.due(chrono::Local::now()));
         let schedules = match (bot.schedules.len(), waiting) {
             (0, _) => "Schedules".to_string(),
@@ -784,6 +790,7 @@ impl Eggbot {
                                 this.settings_open = false;
                                 this.sched_error = None;
                                 this.edit_open = false;
+                                this.skills_open = false;
                                 if this.sched_open {
                                     this.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
                                 }
@@ -791,6 +798,13 @@ impl Eggbot {
                             }))
                             .child(Icon::new(IconName::Clock).size_3())
                             .child(schedules),
+                    )
+                    .child(
+                        link("skills", p)
+                            .when(self.skills_open, |d| d.bg(p.hover).text_color(p.ink))
+                            .on_click(cx.listener(|this, _, window, cx| this.toggle_skills(window, cx)))
+                            .child(Icon::new(IconName::BookOpen).size_3())
+                            .child(skills_label),
                     )
                     .child(div().flex_1())
                     .when_some(self.folder_error.clone(), |d, e| d.child(div().min_w_0().text_xs().text_color(p.err).truncate().child(e)))
@@ -962,7 +976,7 @@ impl Eggbot {
         div().px_6().child(
             self.panel()
                 .child(div().flex().flex_col().gap_1().child(label("Name")).child(field().child(Input::new(&self.edit_name).appearance(false))))
-                .child(div().flex().flex_col().gap_1().child(label("Role")).child(field().child(Textarea::new(&self.edit_role).appearance(false))))
+                .child(div().flex().flex_col().gap_1().child(label("Role")).child(field().child(Textarea::new(&self.edit_role).appearance(false))).child(div().text_xs().text_color(p.muted).child("Skills sit under the composer. They go out with this role on the next turn.")))
                 .child(
                     div()
                         .flex()
@@ -1174,6 +1188,78 @@ impl Eggbot {
                             })).child("Cancel"),
                         )
                         .child(primary("save-settings", p).on_click(cx.listener(|this, _, window, cx| this.save_settings(window, cx))).child("Save")),
+                ),
+        )
+    }
+
+    /// This bot's skills: the preset's defaults, then whatever the user added, edited, or removed.
+    fn skills(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let editing = self.skill_at;
+        let rows = bot.skills.iter().enumerate().map(|(i, s)| {
+            let on = editing == Some(i);
+            let line = s.body.lines().next().unwrap_or("");
+            let mut preview: String = line.chars().take(72).collect();
+            if line.chars().count() > 72 {
+                preview.push('…');
+            }
+            div()
+                .id(("skill", i))
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_2()
+                .py_1()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.hover))
+                .hover(|d| d.bg(p.hover))
+                .on_click(cx.listener(move |this, _, window, cx| this.edit_skill(i, window, cx)))
+                .child(Icon::new(IconName::BookOpen).size_3p5().text_color(p.muted))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_sm().text_color(p.ink).truncate().child(s.name.clone()))
+                        .child(div().text_xs().text_color(p.muted).truncate().child(preview)),
+                )
+                .child(
+                    div()
+                        .id(("unskill", i))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|d| d.text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.remove_skill(i, window, cx);
+                        }))
+                        .child(Icon::new(IconName::Trash).size_3p5()),
+                )
+        });
+        let saving = self.skill_at.is_some();
+        div().px_6().child(
+            self.panel()
+                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(format!("{}'s skills", bot.name)))
+                .child(div().text_xs().text_color(p.muted).child("Procedures this bot follows from its next turn, on Claude and Codex."))
+                .when(bot.skills.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("No skills yet. Add one below.")))
+                .children(rows)
+                .child(div().h(px(1.)).bg(p.line))
+                .child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.skill_name).appearance(false)))
+                .child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Textarea::new(&self.skill_body).appearance(false)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when_some(self.skill_error.clone(), |d, e| d.child(div().flex_1().min_w_0().text_xs().text_color(p.err).child(e)))
+                        .when(self.skill_error.is_none(), |d| d.child(div().flex_1()))
+                        .when(saving, |d| d.child(button("clear-skill", p).on_click(cx.listener(|this, _, window, cx| {
+                            this.clear_skill_form(window, cx);
+                            cx.notify();
+                        })).child("Cancel")))
+                        .child(primary("save-skill", p).on_click(cx.listener(|this, _, window, cx| this.save_skill(window, cx))).child(if saving { "Save" } else { "Add" })),
                 ),
         )
     }

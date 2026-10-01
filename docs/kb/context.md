@@ -18,3 +18,9 @@ Bots never reset, so context only grows. Both CLIs auto-compact near the limit (
 ## Instructions for all bots
 
 Settings holds one text every bot gets after its role, roster and notes rule (`Saved.shared`, None = `SHARED`, the old style line). It is part of the role string, so it reaches running sessions like a role edit: Claude re-reads `--append-system-prompt` every turn; Codex sees a changed role and sends a new `<eggbot-context>` block once.
+
+## Skills
+
+Each bot has `skills: [{name, body}]` in `state.json` (`src/skills.rs`). Hatch copies the preset's defaults (Reviewer, Implementer, Designer; Custom starts empty). The bot then owns that list: the Skills link under the composer adds, edits, and removes on any bot. They are not a shared library and they are not files in the container.
+
+`skills::role_text` inserts them after the bot's role and before the roster. No skills means that piece is empty, so the rest of the role string is unchanged. A later edit changes the role string, so the next turn delivers it: Claude via `--append-system-prompt`, Codex via a new `<eggbot-context>` block when `codex_role` differs. A direct user instruction wins over a skill; that line is in the section itself.

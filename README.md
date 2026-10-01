@@ -7,6 +7,7 @@ Built in Rust with [GPUI](https://www.gpui.rs).
 ## What it does
 
 - **Bots with roles.** Start from a preset or write your own role. Pick the model and effort per bot.
+- **Skills.** Each preset starts with a few procedures. Add, edit, or remove them on any bot; they stay with that bot and go out on the next turn.
 - **Claude and Codex.** Each bot uses `claude` (Claude Code) or `codex` (Codex CLI) with your own login. No API keys.
 - **One container per bot.** Bots get full power inside their own machine, and only the folders you mount.
 - **Handoffs.** A bot that writes `@Name` hands its reply to that bot. Chains pause after 3 hops.
