@@ -3,6 +3,7 @@ mod codex;
 mod egg;
 mod handoff;
 mod login;
+mod memory;
 mod room;
 mod notify;
 mod sandbox;
@@ -216,9 +217,8 @@ impl Setup {
 
 /// "Instructions for all bots" until the user edits them in Settings.
 const SHARED: &str = "Reply in concise GitHub-flavored markdown.";
-const NOTES: &str = " You keep your own notes in /memory/NOTES.md. When a session starts, read it if it exists. Keep it short and current: durable facts about the user, the project, decisions and open work, never chat logs.";
 const QUIET: &str = "\n\n(This is a scheduled run. If nothing here needs the user's attention, reply with exactly QUIET and nothing else.)";
-const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md now with everything worth keeping from this session, then reply with one short line.";
+const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md with short bullets worth keeping (Facts, Preferences, Lessons — no chat logs), or end with one <eggbot-learn> block. Then reply with one short line.";
 
 /// A dropdown option: what is shown, and what is stored (None = the provider's default).
 #[derive(Clone)]
@@ -361,6 +361,9 @@ struct Bot {
     /// The running turn is already that one retry.
     #[serde(skip)]
     retried: bool,
+    /// Newest-first names this bot successfully handed work to. A paused chain is not recorded.
+    #[serde(default)]
+    recent: Vec<String>,
 }
 
 impl Bot {
@@ -401,6 +404,52 @@ impl Bot {
 fn data_dir() -> PathBuf {
     // ponytail: macOS path only; use the `dirs` crate when Linux/Windows builds start
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Library/Application Support/eggbot")
+}
+
+/// Merges an `<eggbot-learn>` block into NOTES.md and returns the reply without that block.
+/// `start` is `reply_from`, so only this turn's bubbles change.
+fn keep_notes(bot: &mut Bot, reply: &str, start: usize) -> String {
+    let (visible, updates) = memory::extract(reply);
+    if visible != reply {
+        // the block can span streamed chunks, so one visible reply replaces them
+        let mut kept = false;
+        let mut i = start.min(bot.msgs.len());
+        while i < bot.msgs.len() {
+            if matches!(bot.msgs[i], Msg::Bot(_)) {
+                if !kept && !visible.is_empty() {
+                    bot.msgs[i] = Msg::Bot(visible.clone());
+                    kept = true;
+                    i += 1;
+                } else {
+                    bot.msgs.remove(i);
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+    if updates.is_empty() {
+        return visible;
+    }
+    let dir = data_dir().join("bots").join(bot.id.to_string()).join("memory");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("eggbot: could not save notes: {e}");
+        return visible;
+    }
+    let path = dir.join("NOTES.md");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let merged = memory::learn(&existing, &updates);
+    if merged != existing {
+        let write = if merged.trim().is_empty() {
+            std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+        } else {
+            std::fs::write(&path, merged)
+        };
+        if let Err(e) = write {
+            eprintln!("eggbot: could not save notes: {e}");
+        }
+    }
+    visible
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -877,6 +926,7 @@ impl Eggbot {
             unread: false,
             current: None,
             retried: false,
+            recent: vec![],
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -1130,9 +1180,18 @@ impl Eggbot {
             cx.notify();
             return;
         }
-        let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
-        let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
-        let others = handoff::roster(&roster, id);
+        let roster_bots: Vec<(usize, String, String)> = self.bots.iter().map(|b| (b.id, b.name.clone(), b.blurb())).collect();
+        let stored = self.bots.iter().find(|b| b.id == id).map(|b| b.recent.clone()).unwrap_or_default();
+        let alive: Vec<&str> = roster_bots.iter().filter(|(i, ..)| *i != id).map(|(_, name, _)| name.as_str()).collect();
+        let recent = handoff::recent(&stored, &alive, 4);
+        let room_peers: Vec<(String, Vec<String>)> = self.rooms.iter().filter(|r| r.members.contains(&id)).map(|r| {
+            let peers: Vec<String> = roster_bots.iter().filter(|(bid, _, _)| *bid != id && r.members.contains(bid)).map(|(_, name, _)| name.clone()).collect();
+            (r.title.clone(), peers)
+        }).filter(|(_, peers)| !peers.is_empty()).collect();
+        let room_names: Vec<Vec<&str>> = room_peers.iter().map(|(_, peers)| peers.iter().map(String::as_str).collect()).collect();
+        let room_refs: Vec<(&str, &[&str])> = room_peers.iter().zip(&room_names).map(|((title, _), peers)| (title.as_str(), peers.as_slice())).collect();
+        let roster_refs: Vec<(usize, &str, &str)> = roster_bots.iter().map(|(i, name, blurb)| (*i, name.as_str(), blurb.as_str())).collect();
+        let others = handoff::roster(&roster_refs, id, &recent, &room_refs);
         let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         let (hops, fresh) = (pending.hops, pending.fresh);
@@ -1150,7 +1209,9 @@ impl Eggbot {
                 eprintln!("eggbot: could not create {}: {e}", dir.display());
             }
         }
-        let role = skills::role_text(bot.role(), &bot.skills, &others, NOTES, &sandbox::folders_note(&bot.folders), &shared);
+        let notes = std::fs::read_to_string(memory.join("NOTES.md")).unwrap_or_default();
+        // skills stay between the role and the roster; notes stay the notes argument
+        let role = skills::role_text(bot.role(), &bot.skills, &others, &memory::context(&notes), &sandbox::folders_note(&bot.folders), &shared);
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
@@ -1288,6 +1349,9 @@ impl Eggbot {
             target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false, room: stays });
             if let Some(s) = self.bots.iter_mut().find(|b| b.id == from) {
                 s.msgs.push(Msg::Sent { to: to_name.clone() });
+                if !paused {
+                    s.recent = handoff::remember(std::mem::take(&mut s.recent), &to_name, 4);
+                }
             }
             if let Some(rid) = stays {
                 self.log_handoff(rid, from, &from_name, color, to, &to_name, paused);
@@ -1624,8 +1688,11 @@ impl Eggbot {
                 let start = bot.reply_from.min(bot.msgs.len());
                 let reply = reply_text(&bot.msgs, start);
                 let hops = bot.hops;
+                let fresh_turn = bot.fresh_turn;
+                // hide the learn block before the transcript, handoff, quiet-check, or alert
+                let reply = if ok { keep_notes(bot, &reply, start) } else { reply };
                 // a scheduled run with nothing to say stays out of the way
-                let quiet = ok && bot.fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
+                let quiet = ok && fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
                 if quiet {
                     let tail = bot.msgs.split_off(start);
                     bot.msgs.extend(tail.into_iter().filter(|m| !matches!(m, Msg::Bot(_))));
@@ -2202,6 +2269,7 @@ mod persist_tests {
         let bot: Bot = serde_json::from_str(old).unwrap();
         assert!(bot.queue.is_empty());
         assert!(bot.current.is_none());
+        assert!(bot.recent.is_empty());
         // a bot saved before skills stays empty; preset defaults are applied only at hatch
         assert!(bot.skills.is_empty());
         assert!(!skills::defaults("Reviewer").is_empty());
@@ -2222,6 +2290,27 @@ mod persist_tests {
         assert!(again.queue[0].room.is_none());
         assert_eq!(again.folders[0].name, "proj");
         assert!(again.current.is_none());
+        assert!(again.recent.is_empty());
+    }
+
+    #[test]
+    fn notes_and_roster_follow_skills() {
+        let skills = skills::defaults("Implementer");
+        let notes = memory::context("## Facts\n- likes short replies\n");
+        let others = handoff::roster(
+            &[(0, "Implementer", "Writes and changes code"), (1, "Reviewer", "Reads diffs, finds bugs, weighs risk")],
+            0,
+            &["Reviewer"],
+            &[("Standup", &["Reviewer"])],
+        );
+        let got = skills::role_text("ROLE", &skills, &others, &notes, " The user's folders are mounted at /work/proj.", "SHARED");
+        let skill_at = got.find("## Smallest change").unwrap();
+        let roster_at = got.find("matches their specialty").unwrap();
+        let notes_at = got.find("likes short replies").unwrap();
+        let folders_at = got.find("/work/proj").unwrap();
+        assert!(skill_at < roster_at && roster_at < notes_at && notes_at < folders_at);
+        assert!(got.contains("In room \"Standup\""));
+        assert!(got.ends_with("SHARED"));
     }
 
     #[test]
