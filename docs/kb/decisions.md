@@ -65,6 +65,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | First-run setup | Centered checklist in place of the chat on first launch + eggbot → Setup…; suggests Colima (free, open source, cross-platform) via brew in Terminal; needs at least one sign-in | Matteo chose these options and Colima as the default |
 | Search | ⌘F (or the top-bar icon) searches the open chat: user messages, replies, handoffs, scheduled prompts (not tool output), any case; starts at the newest match, Enter = older, ⇧Enter = newer, Esc closes; the current match gets a soft highlight | Matteo chose current chat, jump between matches, messages + replies |
 | Sidebar visibility | ⌘B and View → Toggle Sidebar (checked while open) hide or show the bot list; open/closed is saved in `state.json` next to the width; a file without the field stays open | DM-68 recommended default: remember the last state across launches |
+| Multiple folders | Each picked folder mounts at `/work/<name>` (16 per bot); header chips add and remove; handoff names partial overlap | DM-69. Supersedes the single `/work` mount. See `sandbox.md`, `handoff.md` |
 
 ## Phases
 

@@ -47,7 +47,7 @@ Commands arrive wrapped: `/bin/zsh -lc 'cat note.txt'` → show the inner part.
 
 - One `docker exec -i eggbot-<id> codex app-server` per turn; stdin piped (JSON-RPC), stderr ignored.
 - Turn flow: `initialize` → `initialized` → `account/read` (null → "Not signed in to Codex · run codex login") → `account/rateLimits/read` → `thread/resume` (fallback `thread/start`) → `turn/start {effort}` → stream notifications until `turn/completed`.
-- Thread options: `cwd /work`, `sandbox danger-full-access`, `approvalPolicy never` (the container is the sandbox), `developerInstructions` = role + roster + style, `model`.
+- Thread options: `cwd` is `/work/<name>` when the bot has one folder, otherwise `/work`; `sandbox danger-full-access`, `approvalPolicy never` (the container is the sandbox), `developerInstructions` = role + roster + style, `model`.
 - Stop: `Handle.interrupt` writes `turn/interrupt`; the turn ends as `interrupted`.
 - `codex::account()` runs a throwaway container (`sandbox::codex_oneshot`) for usage + `model/list` (with `supportedReasoningEfforts` per model). Called at launch if any bot uses Codex, when a bot switches to Codex, when the editor opens without a model list, and after sign-in.
 - The bot keeps the Codex thread id in `Bot.thread`, apart from the Claude `session`, so switching provider loses neither memory.

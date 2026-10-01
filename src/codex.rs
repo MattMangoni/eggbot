@@ -74,7 +74,7 @@ pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
 }
 
 fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
-    let name = sandbox::ensure(t.bot, &t.mount, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
+    let name = sandbox::ensure(t.bot, &t.folders, &t.scratch, &t.memory, &|s| send(Ev::Status(s.to_string())))?;
     let mut cmd = Command::new("docker");
     cmd.args(["exec", "-i", "-e", &sandbox::tz(), &name, "codex", "app-server"]);
     let (child, mut rpc) = Rpc::start(cmd)?;
@@ -96,7 +96,8 @@ fn converse(t: &Turn, h: &Handle, send: &dyn Fn(Ev), rpc: &mut Rpc) -> Result<bo
         send(Ev::Usage(meter(&r["rateLimits"])));
     }
     // the container is the sandbox, so Codex runs with full access inside it
-    let opts = json!({ "cwd": "/work", "sandbox": "danger-full-access", "approvalPolicy": "never", "developerInstructions": BASE, "model": t.model });
+    let cwd = sandbox::cwd(&t.folders);
+    let opts = json!({ "cwd": cwd, "sandbox": "danger-full-access", "approvalPolicy": "never", "developerInstructions": BASE, "model": t.model });
     let resumed = t.session.as_ref().and_then(|id| {
         let mut p = opts.clone();
         p["threadId"] = json!(id);

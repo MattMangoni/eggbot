@@ -8,7 +8,7 @@ Built in Rust with [GPUI](https://www.gpui.rs).
 
 - **Bots with roles.** Start from a preset or write your own role. Pick the model and effort per bot.
 - **Claude and Codex.** Each bot uses `claude` (Claude Code) or `codex` (Codex CLI) with your own login. No API keys.
-- **One container per bot.** Bots get full power inside their own machine, and only the project folder you mount.
+- **One container per bot.** Bots get full power inside their own machine, and only the folders you mount.
 - **Handoffs.** A bot that writes `@Name` hands its reply to that bot. Chains pause after 3 hops.
 - **Schedules.** Daily, weekdays, or every N hours or minutes. A run with nothing to report stays quiet.
 - **Memory.** Each bot keeps short notes that survive fresh sessions.
