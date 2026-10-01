@@ -39,7 +39,7 @@ On first launch a setup checklist walks you through it: install a Docker engine 
 - You sign in with each provider's own flow in Terminal. The login lives in a Docker volume that the bot containers share.
 - eggbot never reads, stores or forwards your tokens, and never calls Anthropic or OpenAI endpoints itself.
 
-Subscription plans assume individual use, and many busy bots use your plan limits quickly. The sidebar shows your usage.
+Subscription plans assume individual use, and many busy bots use your plan limits quickly. The sidebar shows your usage. At 90% eggbot runs one bot per provider; at 95% it pauses new turns and holds schedules until the meter drops. Change the percents in Settings.
 
 ## Data
 

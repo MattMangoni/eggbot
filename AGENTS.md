@@ -25,6 +25,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
+- `src/usage.rs` — plan-usage guard: throttle and pause thresholds (tested).
 - `src/tray.rs` — menu bar egg icon (unread badge) and menu.
 - `src/notify.rs` — macOS notifications (bundle only); a click opens the bot.
 - `src/login.rs` — start at login (SMAppService, bundle only) and login-launch detection.
