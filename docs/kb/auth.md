@@ -13,7 +13,7 @@ Not allowed:
 - Offering Claude.ai login inside our app, or routing other users' requests through a subscription.
 - Developers "collect, store, or intermediate Claude.ai credentials or session tokens".
 
-Risk that is not a ban: Pro/Max limits "assume ordinary, individual usage". Many parallel always-on bots burn the weekly limit fast — surface limit errors in the UI, keep schedules small.
+Risk that is not a ban: Pro/Max limits "assume ordinary, individual usage". Many parallel always-on bots burn the weekly limit fast — surface limit errors in the UI, keep schedules small. eggbot also throttles at 90% and pauses new turns at 95% (Settings → Usage guardrails; see `decisions.md`).
 
 Our approach: user runs `claude /login` inside a container once; the CLI stores credentials in a Docker volume shared by bot containers. eggbot never reads the token.
 

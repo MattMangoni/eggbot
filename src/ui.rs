@@ -15,6 +15,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
+use crate::usage;
 use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
@@ -94,14 +95,14 @@ fn link(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
         .hover(|d| d.bg(p.hover).text_color(p.ink))
 }
 
-fn bar(used: f32, width: f32, p: Palette) -> Div {
+fn bar(used: f32, width: f32, p: Palette, fill: Hsla) -> Div {
     let used = used.clamp(0., 1.);
     div()
         .w(px(width))
         .h(px(4.))
         .rounded_full()
         .bg(p.tint)
-        .child(div().h_full().rounded_full().w(relative(used)).bg(if used >= 0.8 { p.warn } else { p.muted }))
+        .child(div().h_full().rounded_full().w(relative(used)).bg(fill))
 }
 
 impl Eggbot {
@@ -158,11 +159,21 @@ impl Eggbot {
         let rows = self.bots.iter().enumerate().map(|(i, b)| {
             let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
             let group: SharedString = format!("row-{id}").into();
-            let subtitle = match (b.busy(), b.queue.len()) {
-                (true, 0) => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
-                (true, n) => format!("Thinking… · {n} queued"),
-                (false, n) if n > 0 => format!("{n} queued"),
-                _ => b.blurb(),
+            let hold = self.breach_of(b.provider);
+            let waiting = !b.queue.is_empty() || self.schedules_wait(b);
+            let (subtitle, sub_color) = if b.busy() {
+                let text = match b.queue.len() {
+                    0 => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
+                    n => format!("Thinking… · {n} queued"),
+                };
+                (text, p.muted)
+            } else if let Some(br) = hold.as_ref().filter(|br| br.level == usage::Level::Pause || waiting) {
+                let color = if br.level == usage::Level::Pause { p.err } else { p.warn };
+                (usage::short(usage::provider_name(b.provider), br), color)
+            } else if !b.queue.is_empty() {
+                (format!("{} queued", b.queue.len()), p.muted)
+            } else {
+                (b.blurb(), p.muted)
             };
             let trash = div()
                 .id(("trash", id))
@@ -217,7 +228,7 @@ impl Eggbot {
                         .flex_1()
                         .overflow_hidden()
                         .child(div().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
-                        .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
+                        .child(div().text_xs().text_color(sub_color).truncate().child(subtitle)),
                 )
                 .when(b.busy(), |d| d.child(Spinner::new().color(p.muted).xsmall()))
                 // unread takes the trash's slot; selecting the bot clears it
@@ -335,10 +346,20 @@ impl Eggbot {
             .text_color(p.muted)
             .child(div().flex().child(div().flex_1().child(name)).child(format!("updated {at}")))
             .children(meter.windows.iter().map(|w| {
-                // a window whose reset time has passed is back to zero
-                let v = if w.reset > 0 && now >= w.reset { 0. } else { w.used };
-                div().flex().items_center().gap_2().child(div().w(px(34.)).child(w.label.clone())).child(div().flex_1().child(bar(v, 0., p).w_full())).child(div().w(px(30.)).text_right().child(format!("{:.0}%", v.clamp(0., 1.) * 100.)))
+                let v = usage::window_used(w, now);
+                let fill = if v >= self.pause { p.err } else if v >= usage::AMBER { p.warn } else { p.muted };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(34.)).child(w.label.clone()))
+                    .child(div().flex_1().child(bar(v, 0., p, fill).w_full()))
+                    .child(div().w(px(30.)).text_right().text_color(fill).child(format!("{}%", usage::percent(v))))
             }))
+            .when_some(self.breach_of(meter.provider), |d, br| {
+                let color = if br.level == usage::Level::Pause { p.err } else { p.warn };
+                d.child(div().text_color(color).child(usage::meter_line(&br)))
+            })
     }
 
     fn hatch_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -494,11 +515,12 @@ impl Eggbot {
             .child(div().mr_2().child(self.find_bar(cx)))
             .when(bot.context.1 > 0, |d| {
                 let used = bot.context.0 as f32 / bot.context.1 as f32;
-                d.child(div().mr_2().flex().items_center().gap_2().text_xs().text_color(p.muted).child("Context").child(bar(used, 40., p)).child(format!("{:.0}%", used.clamp(0., 1.) * 100.)))
+                let fill = if used >= 0.8 { p.warn } else { p.muted };
+                d.child(div().mr_2().flex().items_center().gap_2().text_xs().text_color(p.muted).child("Context").child(bar(used, 40., p, fill)).child(format!("{:.0}%", used.clamp(0., 1.) * 100.)))
             })
             .child(
                 button("fresh", p)
-                    .when(bot.busy(), |d| d.opacity(0.4))
+                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4))
                     .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
                     .child(Icon::new(IconName::RefreshCw).size_3())
                     .child("Fresh start"),
@@ -575,6 +597,7 @@ impl Eggbot {
     fn composer(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let busy = bot.busy();
+        let paused = self.breach_of(bot.provider).is_some_and(|b| b.level == usage::Level::Pause);
         let send = div()
             .id("send")
             .size(px(32.))
@@ -586,6 +609,7 @@ impl Eggbot {
             .bg(p.ink)
             .text_color(p.bg)
             .cursor_pointer()
+            .when(paused && !busy, |d| d.opacity(0.4))
             .hover(|d| d.opacity(0.8))
             .on_click(cx.listener(move |this, _, window, cx| if busy { this.stop(cx) } else { this.send(window, cx) }))
             .child(if busy { div().size(px(10.)).rounded(px(2.)).bg(p.bg).into_any_element() } else { Icon::new(IconName::ArrowUp).size_4().into_any_element() });
@@ -610,14 +634,42 @@ impl Eggbot {
             Some(e) => link("codex-retry", p).child(format!("Codex: {e} · Retry")).on_click(cx.listener(|this, _, _, cx| this.refresh_codex(1, cx))).into_any_element(),
         });
 
-        let schedules = match bot.schedules.len() {
-            0 => "Schedules".to_string(),
-            1 => "1 schedule".to_string(),
-            n => format!("{n} schedules"),
+        let waiting = self.schedules_wait(bot) && bot.schedules.iter().any(|s| s.due(chrono::Local::now()));
+        let schedules = match (bot.schedules.len(), waiting) {
+            (0, _) => "Schedules".to_string(),
+            (1, false) => "1 schedule".to_string(),
+            (1, true) => "1 schedule · waiting".to_string(),
+            (n, false) => format!("{n} schedules"),
+            (n, true) => format!("{n} schedules · waiting"),
         };
+        // the meter already says "one at a time"; the banner appears when this bot cannot start
+        let guard = self.breach_of(bot.provider).filter(|br| br.level == usage::Level::Pause || !self.may_start(bot.provider) || !bot.queue.is_empty()).map(|br| {
+            let color = if br.level == usage::Level::Pause { p.err } else { p.warn };
+            let mut text = usage::explain(usage::provider_name(bot.provider), &br, self.pause, self.throttle);
+            if !bot.queue.is_empty() {
+                text.push_str(" Waiting work starts once the limit allows it.");
+            }
+            div()
+                .mb_2()
+                .px_3()
+                .py_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(12.))
+                .bg(p.card)
+                .border_1()
+                .border_color(p.line)
+                .text_xs()
+                .text_color(color)
+                .child(Icon::new(IconName::CircleAlert).size_3p5())
+                .child(text)
+        });
+
         div()
             .flex()
             .flex_col()
+            .children(guard)
             .child(
                 div()
                     .flex()
@@ -892,6 +944,29 @@ impl Eggbot {
                         .child(label("Every bot gets these next to its own role, on Claude and Codex, from its next turn."))
                         .child(div().mt_1().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Textarea::new(&self.edit_shared).appearance(false))),
                 )
+                .child(div().h(px(1.)).bg(p.line))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_sm().text_color(p.ink).child("Usage guardrails"))
+                        .child(label("Throttle runs one bot per provider. Pause holds new turns and leaves schedules due. The bars stay amber from 80%. A window past its reset counts as empty."))
+                        .child(
+                            div()
+                                .mt_1()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(label("Throttle at"))
+                                .child(div().w(px(64.)).px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.limit_throttle).appearance(false)))
+                                .child(label("%"))
+                                .child(label("Pause at").ml_2())
+                                .child(div().w(px(64.)).px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.limit_pause).appearance(false)))
+                                .child(label("%")),
+                        ),
+                )
+                .when_some(self.settings_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
                 .child(
                     div()
                         .flex()
@@ -912,8 +987,19 @@ impl Eggbot {
     /// The schedules panel: this bot's schedules and a form to add one.
     fn schedules(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
+        let now = chrono::Local::now();
+        let wait = self.schedules_wait(bot);
+        let provider = bot.provider;
+        let hold = self.breach_of(provider);
+        let note_color = if hold.as_ref().is_some_and(|b| b.level == usage::Level::Pause) { p.err } else { p.warn };
         let rows = bot.schedules.iter().map(|s| {
             let id = s.id;
+            let due_held = wait && s.due(now);
+            let when = if due_held {
+                hold.as_ref().map(|br| format!("waiting · {}", usage::short(usage::provider_name(provider), br))).unwrap_or_else(|| "waiting".into())
+            } else {
+                format!("{} · next {}", s.repeat.label(), s.next_run().format("%a %H:%M"))
+            };
             div()
                 .flex()
                 .items_center()
@@ -921,7 +1007,7 @@ impl Eggbot {
                 .text_sm()
                 .child(Icon::new(IconName::Clock).size_3p5().text_color(p.muted))
                 .child(div().flex_1().truncate().text_color(p.ink).child(s.prompt.clone()))
-                .child(div().text_xs().text_color(p.muted).child(format!("{} · next {}", s.repeat.label(), s.next_run().format("%a %H:%M"))))
+                .child(div().text_xs().text_color(if due_held { note_color } else { p.muted }).child(when))
                 .child(
                     div()
                         .id(("unschedule", id))
@@ -956,6 +1042,7 @@ impl Eggbot {
             self.panel()
                 .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(format!("{}'s schedules", bot.name)))
                 .when(bot.schedules.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Nothing scheduled. Each run starts a fresh session with the bot's notes.")))
+                .when(wait && !bot.schedules.is_empty(), |d| d.child(div().text_xs().text_color(note_color).child("Due runs wait here instead of starting, and go once the meter drops.")))
                 .children(rows)
                 .child(div().h(px(1.)).bg(p.line))
                 .child(field(&self.sched_prompt))

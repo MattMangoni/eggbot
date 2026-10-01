@@ -8,6 +8,7 @@ mod sandbox;
 mod schedule;
 mod tray;
 mod ui;
+mod usage;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -393,6 +394,12 @@ struct Saved {
     /// Instructions for all bots; None = `SHARED`.
     #[serde(default)]
     shared: Option<String>,
+    /// Fraction of a plan window where extra bots wait their turn. Missing in older state.json = 90%.
+    #[serde(default = "default_throttle")]
+    throttle: f32,
+    /// Fraction where new turns wait. Missing in older state.json = 95%.
+    #[serde(default = "default_pause")]
+    pause: f32,
 }
 
 fn default_sidebar() -> f32 {
@@ -401,6 +408,14 @@ fn default_sidebar() -> f32 {
 
 fn default_sidebar_open() -> bool {
     true
+}
+
+fn default_throttle() -> f32 {
+    usage::DEFAULT_THROTTLE
+}
+
+fn default_pause() -> f32 {
+    usage::DEFAULT_PAUSE
 }
 
 struct Eggbot {
@@ -414,6 +429,10 @@ struct Eggbot {
     /// Bot id whose trash icon was clicked once; a second click deletes.
     confirm_delete: Option<usize>,
     meters: Vec<Meter>,
+    /// One-at-a-time starts at this fraction of any plan window (5h, 7d, week).
+    throttle: f32,
+    /// New turns wait at this fraction. The turn already running finishes.
+    pause: f32,
     /// Codex models this account can use; fetched on demand.
     codex_models: Vec<codex::Model>,
     /// None = idle; Some(None) = asking now; Some(Some(e)) = the last question failed with `e`.
@@ -432,6 +451,9 @@ struct Eggbot {
     settings_open: bool,
     edit_shared: Entity<TextareaState>,
     shared: Option<String>,
+    limit_throttle: Entity<InputState>,
+    limit_pause: Entity<InputState>,
+    settings_error: Option<String>,
     login_error: Option<String>,
     edit_error: Option<String>,
     model_select: Entity<SelectState<Vec<Choice>>>,
@@ -504,6 +526,8 @@ impl Eggbot {
             role.set_auto_grow(4, 12, cx);
             role
         });
+        let limit_throttle = cx.new(|cx| InputState::new(window, cx).placeholder("90"));
+        let limit_pause = cx.new(|cx| InputState::new(window, cx).placeholder("95"));
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
@@ -566,7 +590,7 @@ impl Eggbot {
                 // docker info can block; only ask when a handoff is actually waiting
                 if needs_docker {
                     let online = cx.background_executor().spawn(async { sandbox::running() }).await;
-                    if this.update(cx, |this, cx| this.pump_queues(online, cx)).is_err() {
+                    if this.update(cx, |this, cx| this.pump_queues(online, None, cx)).is_err() {
                         break;
                     }
                 }
@@ -581,11 +605,11 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared);
+                (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared, this.throttle, this.pause) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
                 for b in &mut this.bots {
                     sandbox::adopt_legacy(&mut b.folders, b.folder.take());
                 }
@@ -721,7 +745,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -791,16 +815,29 @@ impl Eggbot {
             s.set_value(shared, window, cx);
             s.focus(window, cx);
         });
-        (self.settings_open, self.edit_open, self.sched_open, self.login_error) = (true, false, false, None);
+        let (throttle, pause) = (usage::percent(self.throttle).to_string(), usage::percent(self.pause).to_string());
+        self.limit_throttle.update(cx, |s, cx| s.set_value(throttle, window, cx));
+        self.limit_pause.update(cx, |s, cx| s.set_value(pause, window, cx));
+        (self.settings_open, self.edit_open, self.sched_open, self.login_error, self.settings_error) = (true, false, false, None, None);
         cx.notify();
     }
 
     /// Saves the instructions for all bots; each bot gets them from its next turn (both providers).
     fn save_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.edit_shared.read(cx).value().trim().to_string();
+        let limits = usage::parse_limits(&self.limit_throttle.read(cx).value(), &self.limit_pause.read(cx).value());
+        let Ok((throttle, pause)) = limits else {
+            self.settings_error = limits.err().map(str::to_string);
+            cx.notify();
+            return;
+        };
         self.shared = (text != SHARED).then_some(text);
-        self.settings_open = false;
+        (self.throttle, self.pause) = (throttle, pause);
+        (self.settings_open, self.settings_error) = (false, None);
         self.save();
+        // a looser limit can let held schedules and queued turns go
+        self.release_schedules(cx);
+        self.resume_queues(cx);
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -913,18 +950,42 @@ impl Eggbot {
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input.read(cx).value().trim().to_string();
-        let Some(bot) = self.bots.get_mut(self.selected) else { return };
+        let Some(bot) = self.bots.get(self.selected) else { return };
         if text.is_empty() || bot.busy() {
             return;
         }
+        let (id, provider) = (bot.id, bot.provider);
+        // a paused send stays in the box, so a window that resets overnight does not fire a draft
+        if self.breach_of(provider).is_some_and(|b| b.level == usage::Level::Pause) {
+            cx.notify();
+            return;
+        }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        bot.msgs.push(Msg::User(text.clone()));
-        let id = bot.id;
-        self.start_turn(id, handoff::Pending::user(text), cx);
+        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
+            bot.msgs.push(Msg::User(text.clone()));
+        }
+        let pending = handoff::Pending::user(text);
+        // throttled and another bot is running: the message waits on the persisted queue
+        if !self.may_start(provider) {
+            self.deliver(id, pending, cx);
+            return;
+        }
+        self.start_turn(id, pending, cx);
     }
 
     /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
     fn start_turn(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
+        let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };
+        let busy = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy());
+        // never drop a hop: if the guard closed, put it back at the front of the saved queue
+        if busy || !self.may_start(provider) {
+            if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
+                bot.queue.insert(0, pending);
+            }
+            self.save();
+            cx.notify();
+            return;
+        }
         let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
         let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster, id);
@@ -984,19 +1045,19 @@ impl Eggbot {
         cx.notify();
     }
 
-    /// Starts the turn now, or queues it behind the bot's current turn.
+    /// Starts the turn now, or appends it to the persisted queue (busy, already queued, or over the usage limit).
     fn deliver(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
-        if self.bots.iter().any(|b| b.id == id && b.busy()) {
+        let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };
+        let wait = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy() || !b.queue.is_empty()) || !self.may_start(provider);
+        if wait {
             if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
                 b.queue.push(pending);
             }
-            // callers usually save later; this covers a crash in between
             self.save();
+            cx.notify();
             return;
         }
-        if self.bots.iter().any(|b| b.id == id) {
-            self.start_turn(id, pending, cx);
-        }
+        self.start_turn(id, pending, cx);
     }
 
     /// An in-flight @Name hop goes back on the queue. User turns and schedules stay stopped.
@@ -1015,19 +1076,49 @@ impl Eggbot {
         }
     }
 
-    /// Starts the head of each idle bot's queue once Docker answers. Offline keeps the queue.
-    fn pump_queues(&mut self, online: bool, cx: &mut Context<Self>) {
+    /// Starts the head of each idle bot's queue once Docker is up and the usage guard allows it.
+    /// Offline, paused, or throttled-behind-another-bot: the queue is not touched.
+    fn pump_queues(&mut self, online: bool, prefer: Option<usize>, cx: &mut Context<Self>) {
+        let mut ids: Vec<usize> = self.bots.iter().map(|b| b.id).collect();
+        if let Some(id) = prefer {
+            ids.retain(|i| *i != id);
+            ids.insert(0, id);
+        }
         let mut starts = vec![];
-        for b in &mut self.bots {
-            let (next, queue) = handoff::dequeue(std::mem::take(&mut b.queue), b.busy(), !online);
-            b.queue = queue;
+        for id in ids {
+            let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { continue };
+            let busy = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy());
+            if busy || !online || !self.may_start(provider) {
+                continue;
+            }
+            let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { continue };
+            let (next, queue) = handoff::dequeue(std::mem::take(&mut bot.queue), false, false);
+            bot.queue = queue;
             if let Some(pending) = next {
-                starts.push((b.id, pending));
+                starts.push((id, pending));
             }
         }
         for (id, pending) in starts {
+            let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { continue };
+            // a sibling may have started in this loop; put the hop back rather than dropping it
+            if !self.may_start(provider) {
+                if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+                    b.queue.insert(0, pending);
+                }
+                self.save();
+                continue;
+            }
             self.start_turn(id, pending, cx);
         }
+    }
+
+    /// Docker check off the UI thread, then start whatever the guard now allows.
+    fn resume_queues(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let online = cx.background_executor().spawn(async { sandbox::running() }).await;
+            this.update(cx, |this, cx| this.pump_queues(online, None, cx)).ok();
+        })
+        .detach();
     }
 
     /// Sends the finished reply to every bot it mentions as @Name; false when it mentions nobody.
@@ -1060,25 +1151,51 @@ impl Eggbot {
         handed
     }
 
-    /// Starts (or queues) every schedule that is due.
+    /// Starts due schedules the usage guard is willing to run. Held ones keep their anchor.
     fn run_due(&mut self, cx: &mut Context<Self>) {
+        let before = self.guard_levels();
+        let started = self.release_schedules(cx);
+        if started || before != self.guard_levels() {
+            cx.notify();
+        }
+    }
+
+    /// Moves due schedules onto a bot when the guard allows. Held ones keep their anchor, so they stay due.
+    fn release_schedules(&mut self, cx: &mut Context<Self>) -> bool {
         let now = chrono::Local::now();
+        let levels = [Provider::Claude, Provider::Codex].map(|p| (p, self.breach_of(p).map(|b| b.level).unwrap_or(usage::Level::Ok)));
+        let mut taken: Vec<Provider> = self.bots.iter().filter(|b| b.busy()).map(|b| b.provider).collect();
+        for b in &self.bots {
+            if !b.queue.is_empty() && !taken.contains(&b.provider) {
+                taken.push(b.provider);
+            }
+        }
         let mut due = vec![];
         for b in &mut self.bots {
+            let level = levels.iter().find(|(p, _)| *p == b.provider).map(|(_, l)| *l).unwrap_or(usage::Level::Ok);
+            let provider_taken = taken.contains(&b.provider);
+            if !usage::schedule_action(level, b.busy(), !b.queue.is_empty(), provider_taken) {
+                continue;
+            }
+            let mut fired = false;
             for s in b.schedules.iter_mut().filter(|s| s.due(now)) {
                 s.anchor = now.timestamp();
                 b.msgs.push(Msg::Scheduled { prompt: s.prompt.clone(), label: s.repeat.label() });
                 due.push((b.id, format!("{}{QUIET}", s.prompt)));
+                fired = true;
+            }
+            if fired && level == usage::Level::Throttle && !taken.contains(&b.provider) {
+                taken.push(b.provider);
             }
         }
         if due.is_empty() {
-            return;
+            return false;
         }
         for (id, prompt) in due {
             self.deliver(id, handoff::Pending::schedule(prompt), cx);
         }
         self.save();
-        cx.notify();
+        true
     }
 
     fn add_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1153,6 +1270,12 @@ impl Eggbot {
     }
 
     fn continue_chain(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.iter().find(|b| b.id == id) else { return };
+        // the hop button does not override a full plan window; the banner says why
+        if self.breach_of(bot.provider).is_some_and(|b| b.level == usage::Level::Pause) {
+            cx.notify();
+            return;
+        }
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         if let Some(Msg::Handoff { prompt, paused, .. }) = bot.msgs.get_mut(i)
             && *paused
@@ -1178,7 +1301,7 @@ impl Eggbot {
     fn apply(&mut self, id: usize, ev: claude::Ev, cx: &mut Context<Self>) {
         use claude::Ev;
         if let Ev::Usage(meter) = ev {
-            self.set_meter(meter);
+            self.set_meter(meter, cx);
             cx.notify();
             return;
         }
@@ -1254,7 +1377,7 @@ impl Eggbot {
                 if engine_down && let Some(turn) = finished.filter(handoff::Pending::inflight) {
                     bot.queue.insert(0, turn);
                 }
-                let next = (!engine_down && !bot.queue.is_empty()).then(|| bot.queue.remove(0));
+                let provider = bot.provider;
                 let refreshed = std::mem::take(&mut bot.refreshing);
                 if let Some(role) = bot.pending_role.take().filter(|_| ok) {
                     bot.codex_role = Some(role);
@@ -1274,9 +1397,19 @@ impl Eggbot {
                     None if ok && !quiet && !handed => self.alert(id, &name, &reply),
                     None => {}
                 }
+                // over the limit: leave the persisted queue alone
+                let next = if !engine_down && self.may_start(provider) {
+                    self.bots.iter_mut().find(|b| b.id == id).and_then(|b| (!b.queue.is_empty()).then(|| b.queue.remove(0)))
+                } else {
+                    None
+                };
                 if let Some(pending) = next {
                     self.start_turn(id, pending, cx);
                 }
+                if !engine_down {
+                    self.pump_queues(true, Some(id), cx);
+                }
+                self.release_schedules(cx);
                 self.save();
             }
             _ => {}
@@ -1390,10 +1523,12 @@ impl Eggbot {
 
     /// The bot saves its notes, then its next turn starts a new session.
     fn fresh_start(&mut self, cx: &mut Context<Self>) {
-        let Some(bot) = self.bots.get_mut(self.selected) else { return };
-        if bot.busy() {
+        let Some(bot) = self.bots.get(self.selected) else { return };
+        if bot.busy() || !self.may_start(bot.provider) {
+            cx.notify();
             return;
         }
+        let Some(bot) = self.bots.get_mut(self.selected) else { return };
         bot.refreshing = true;
         bot.msgs.push(Msg::Scheduled { prompt: "Save your notes before a fresh session.".into(), label: "Fresh start".into() });
         let id = bot.id;
@@ -1401,10 +1536,12 @@ impl Eggbot {
     }
 
     fn send_again(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
-        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
-        if bot.busy() {
+        let Some(bot) = self.bots.iter().find(|b| b.id == id) else { return };
+        if bot.busy() || !self.may_start(bot.provider) {
+            cx.notify();
             return;
         }
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         if let Some(Msg::SignedIn { prompt, .. }) = bot.msgs.get_mut(i)
             && let Some(text) = prompt.take()
         {
@@ -1413,10 +1550,50 @@ impl Eggbot {
         }
     }
 
-    fn set_meter(&mut self, meter: Meter) {
+    fn set_meter(&mut self, meter: Meter, cx: &mut Context<Self>) {
+        let provider = meter.provider;
+        let before = self.breach_of(provider).map(|b| b.level);
         self.meters.retain(|m| m.provider != meter.provider);
         self.meters.push(meter);
         self.meters.sort_by_key(|m| m.provider.label());
+        let after = self.breach_of(provider);
+        if after.as_ref().is_some_and(|b| b.level == usage::Level::Pause) && before != Some(usage::Level::Pause) {
+            self.announce_pause(provider, after.as_ref().unwrap());
+        }
+        self.release_schedules(cx);
+        self.resume_queues(cx);
+        self.save();
+    }
+
+    fn announce_pause(&mut self, provider: Provider, breach: &usage::Breach) {
+        let Some(id) = self.bots.iter().find(|b| b.provider == provider).map(|b| b.id) else { return };
+        let text = usage::explain(usage::provider_name(provider), breach, self.pause, self.throttle);
+        self.alert(id, &format!("{} usage paused", usage::provider_name(provider)), &text);
+    }
+
+    fn breach_of(&self, provider: Provider) -> Option<usage::Breach> {
+        let now = chrono::Local::now().timestamp();
+        self.meters.iter().find(|m| m.provider == provider).and_then(|m| usage::breach(&m.windows, now, self.throttle, self.pause))
+    }
+
+    /// Pause blocks every new turn. Throttle blocks a second bot of the same provider.
+    fn may_start(&self, provider: Provider) -> bool {
+        match self.breach_of(provider).map(|b| b.level) {
+            Some(usage::Level::Pause) => false,
+            Some(usage::Level::Throttle) => !self.bots.iter().any(|b| b.provider == provider && b.busy()),
+            _ => true,
+        }
+    }
+
+    fn guard_levels(&self) -> [usage::Level; 2] {
+        [Provider::Claude, Provider::Codex].map(|p| self.breach_of(p).map(|b| b.level).unwrap_or(usage::Level::Ok))
+    }
+
+    /// Due schedules of this bot are sitting out a throttle or a pause.
+    fn schedules_wait(&self, bot: &Bot) -> bool {
+        let Some(breach) = self.breach_of(bot.provider) else { return false };
+        let provider_taken = self.bots.iter().any(|b| b.id != bot.id && b.provider == bot.provider && (b.busy() || !b.queue.is_empty()));
+        !usage::schedule_action(breach.level, bot.busy(), !bot.queue.is_empty(), provider_taken)
     }
 
     /// Codex usage and model list, from a throwaway container (no turn needed).
@@ -1441,7 +1618,7 @@ impl Eggbot {
             this.update(cx, |this, cx| {
                 match answer {
                     Ok((meter, models)) => {
-                        this.set_meter(meter);
+                        this.set_meter(meter, cx);
                         this.codex_models = models;
                         this.codex_query = None;
                         this.selects_stale = true;
@@ -1599,6 +1776,30 @@ mod persist_tests {
         let bot: Bot = serde_json::from_str(old).unwrap();
         assert!(bot.queue.is_empty());
         assert!(bot.current.is_none());
+    }
+
+    #[test]
+    fn state_json_keeps_queue_current_and_limits() {
+        let raw = r#"{"next_id":2,"bots":[{"id":1,"name":"Reviewer","preset":0,"sandbox_session":null,"msgs":[],"folders":[{"path":"/tmp/proj","name":"proj"}],"queue":[{"prompt":"ship it","hops":2,"fresh":false,"handoff":true}],"current":{"prompt":"look","hops":1,"fresh":false,"handoff":true}}],"meters":[],"throttle":0.9,"pause":0.95}"#;
+        let saved: Saved = serde_json::from_str(raw).unwrap();
+        assert_eq!(usage::percent(saved.throttle), 90);
+        assert_eq!(usage::percent(saved.pause), 95);
+        assert!(saved.bots[0].queue[0].inflight());
+        assert_eq!(saved.bots[0].current.as_ref().map(|p| p.prompt.as_str()), Some("look"));
+        assert_eq!(saved.bots[0].folders[0].name, "proj");
+        // same keys save() writes; queue, current, and folders ride inside bots
+        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause });
+        let again: Saved = serde_json::from_value(state).unwrap();
+        assert_eq!(again.bots[0].queue[0].prompt, "ship it");
+        assert_eq!(again.bots[0].current.as_ref().unwrap().hops, 1);
+        assert_eq!(again.bots[0].folders[0].name, "proj");
+        assert!(again.bots[0].folder.is_none());
+        assert_eq!(usage::percent(again.pause), 95);
+
+        let legacy = r#"{"next_id":1,"bots":[]}"#;
+        let old: Saved = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.throttle, usage::DEFAULT_THROTTLE);
+        assert_eq!(old.pause, usage::DEFAULT_PAUSE);
     }
 }
 
