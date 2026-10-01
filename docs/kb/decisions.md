@@ -29,7 +29,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Delete bot | Hover trash, click twice; removes bot, container, scratch folder, never a project folder | |
 | Handoff payload | Reply + context line (sender, shared folder or not) | |
 | Hop limit | Chain pauses after 3 automatic handoffs; "Continue chain" resets the count | |
-| Busy receiver | Handoff queued, starts when the current turn ends | Queue is not persisted |
+| Busy receiver | Handoff queued, starts when the current turn ends | Persisted in `state.json` since 2026-10-01; an interrupted hop resumes when the bot is idle and Docker is up |
 | Handoff display | Card "From X" (sender color) in receiver, "→ sent to Y" in sender; both clickable | |
 | Background | Menu bar egg (`tray-icon`); closing the window hides it and the Dock icon | Egg wobbles while a bot works |
 | Quit | Ask when bots are working, then stop their turns; containers stay | |

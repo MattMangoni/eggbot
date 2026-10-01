@@ -37,6 +37,16 @@ fn docker(args: &[&str]) -> Result<String, String> {
     run(Command::new("docker").args(args))
 }
 
+/// True when `error` means the engine was down, so a waiting handoff must stay queued.
+pub fn engine_down(error: &str) -> bool {
+    error.contains("Could not start Docker")
+        || error.contains("Docker did not start")
+        || error.contains("Could not run docker")
+        || error.contains("no Docker engine")
+        || error.contains("Cannot connect to the Docker daemon")
+        || error.contains("Is the docker daemon running")
+}
+
 /// Starts the engine behind the active Docker context, then waits until it answers.
 pub fn wake() -> Result<(), String> {
     let context = docker(&["context", "show"]).unwrap_or_default();
@@ -170,4 +180,19 @@ pub fn codex_oneshot() -> Command {
 /// Removes the bot's container; the shared login volume stays.
 pub fn remove(bot: usize) {
     let _ = docker(&["rm", "-f", &container(bot)]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::engine_down;
+
+    #[test]
+    fn engine_down_is_the_startup_failure() {
+        assert!(engine_down("Could not start Docker: open failed. Start it yourself and send again."));
+        assert!(engine_down("Docker did not start within 90 seconds"));
+        assert!(engine_down("Could not run docker: No such file or directory (os error 2)"));
+        assert!(engine_down("Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"));
+        assert!(!engine_down("Not logged in · Please run /login"));
+        assert!(!engine_down("claude stopped (exit status: 1). "));
+    }
 }

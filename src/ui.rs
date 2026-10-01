@@ -152,6 +152,7 @@ impl Eggbot {
             let subtitle = match (b.busy(), b.queue.len()) {
                 (true, 0) => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
                 (true, n) => format!("Thinking… · {n} queued"),
+                (false, n) if n > 0 => format!("{n} queued"),
                 _ => b.blurb(),
             };
             let trash = div()
