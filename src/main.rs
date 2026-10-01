@@ -250,7 +250,17 @@ enum Msg {
     Tool { id: String, verb: String, target: String, detail: String, open: bool },
     Error(String),
     /// Work handed over by another bot; `paused` when the chain hit the hop limit.
-    Handoff { from: String, color: u32, prompt: String, text: String, paused: bool, open: bool },
+    Handoff {
+        from: String,
+        color: u32,
+        prompt: String,
+        text: String,
+        paused: bool,
+        open: bool,
+        /// Set when this hop stays inside a room. Continue chain keeps it on the next turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        room: Option<usize>,
+    },
     Sent { to: String },
     /// Marks where a fresh session began.
     Divider(String),
@@ -260,6 +270,12 @@ enum Msg {
     SignedIn { provider: Provider, prompt: Option<String> },
     /// A room kickoff, shown in the facilitator's chat. `prompt` is what the bot was told.
     Kickoff { room_id: usize, room: String, text: String, prompt: String },
+}
+
+/// Bot text written at and after `from`. Earlier lines belong to a previous turn.
+fn reply_text(msgs: &[Msg], from: usize) -> String {
+    let from = from.min(msgs.len());
+    msgs[from..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
 }
 
 impl Msg {
@@ -315,6 +331,9 @@ struct Bot {
     /// Handoff hops that led to the current turn (0 = started by the user).
     #[serde(skip)]
     hops: u32,
+    /// `msgs` index where the running turn's output starts. A queued kickoff is not always the last marker.
+    #[serde(skip)]
+    reply_from: usize,
     /// Turns waiting for this one to finish (handoffs, and schedules that arrived mid-turn).
     #[serde(default)]
     queue: Vec<handoff::Pending>,
@@ -511,6 +530,10 @@ struct Eggbot {
     list: ListState,
     /// The bot whose messages `list` holds.
     list_bot: Option<usize>,
+    /// The open room's transcript. Separate from `list`, which is one bot's chat.
+    room_list: ListState,
+    /// Room id `room_list` was built for. None after the room closes, so the next open jumps to the end.
+    room_list_for: Option<usize>,
 }
 
 impl Eggbot {
@@ -663,8 +686,9 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
         this.list.set_follow_mode(FollowMode::Tail);
+        this.room_list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared, this.throttle, this.pause) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
@@ -843,6 +867,7 @@ impl Eggbot {
             status: None,
             stopped: false,
             hops: 0,
+            reply_from: 0,
             queue: vec![],
             fresh_turn: false,
             refreshing: false,
@@ -932,6 +957,43 @@ impl Eggbot {
         }
     }
 
+    /// Keeps the room list in step with the transcript plus any member still writing this room's turn.
+    fn sync_room_list(&mut self) {
+        let Some(id) = self.open_room else {
+            self.room_list_for = None;
+            return;
+        };
+        let n = self.rooms.iter().find(|r| r.id == id).map(|r| r.transcript.len()).unwrap_or(0);
+        let count = n + self.room_live(id).len();
+        if self.room_list_for != Some(id) {
+            self.room_list_for = Some(id);
+            self.room_list.reset(count);
+            if count > 0 {
+                self.room_list.scroll_to_end();
+            }
+            return;
+        }
+        let old = self.room_list.item_count();
+        if count > old {
+            self.room_list.splice(old..old, count - old);
+        } else if count < old {
+            self.room_list.splice(count..old, 0);
+        }
+    }
+
+    /// Members whose running turn belongs to this room, in a stable order.
+    fn room_live(&self, room_id: usize) -> Vec<usize> {
+        let mut ids: Vec<usize> = self.bots.iter().filter(|b| b.busy() && b.current.as_ref().is_some_and(|p| p.room == Some(room_id))).map(|b| b.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn open_bot(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.bots.iter().position(|b| b.id == id) {
+            self.select(i, window, cx);
+        }
+    }
+
     /// Moves bot `from` to just above row `before` (`before` = len: the end); the selection stays on the same bot.
     fn move_bot(&mut self, from: usize, before: usize, cx: &mut Context<Self>) {
         self.dragging = None;
@@ -1016,16 +1078,12 @@ impl Eggbot {
     }
 
     /// News from a bot: unread unless the user is looking at it, and a notification while eggbot is in the background.
-    /// Rooms that include the bot are unread too, unless that room is open.
+    /// A room's own dot is its transcript, not every message a member receives.
     fn alert(&mut self, id: usize, title: &str, body: &str) {
         let seeing = self.open_room.is_none() && self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id);
         if !seeing {
             if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
                 b.unread = true;
-            }
-            let open = self.open_room;
-            for room in self.rooms.iter_mut().filter(|r| open != Some(r.id) && r.members.contains(&id)) {
-                room.unread = true;
             }
         }
         if !self.active {
@@ -1082,6 +1140,7 @@ impl Eggbot {
         bot.stopped = false;
         bot.hops = hops;
         bot.fresh_turn = fresh;
+        bot.reply_from = bot.msgs.len();
         bot.current = Some(pending);
         // notes stay in /memory; scratch is /work only when the user has mounted nothing
         let home = data_dir().join("bots").join(id.to_string());
@@ -1208,7 +1267,8 @@ impl Eggbot {
     }
 
     /// Sends the finished reply to every bot it mentions as @Name; false when it mentions nobody.
-    fn hand_off(&mut self, from: usize, reply: String, hops: u32, cx: &mut Context<Self>) -> bool {
+    /// `room` is kept only for targets still on that room's roster (`room::carry`).
+    fn hand_off(&mut self, from: usize, reply: String, hops: u32, room: Option<usize>, cx: &mut Context<Self>) -> bool {
         let names: Vec<(usize, &str)> = self.bots.iter().map(|b| (b.id, b.name.as_str())).collect();
         let targets = handoff::mentions(&reply, &names, from);
         let handed = !targets.is_empty();
@@ -1217,24 +1277,57 @@ impl Eggbot {
         let from_mounts: Vec<(PathBuf, String)> = sender.folders.iter().map(|f| (f.path.clone(), f.dest())).collect();
         let next = hops + 1;
         for to in targets {
+            let stays = self.rooms.iter().find(|r| Some(r.id) == room).and_then(|r| room::carry(room, &r.members, to));
             let Some(target) = self.bots.iter_mut().find(|b| b.id == to) else { continue };
             let to_mounts: Vec<(PathBuf, String)> = target.folders.iter().map(|f| (f.path.clone(), f.dest())).collect();
             let mine: Vec<(&std::path::Path, &str)> = from_mounts.iter().map(|(p, d)| (p.as_path(), d.as_str())).collect();
             let theirs: Vec<(&std::path::Path, &str)> = to_mounts.iter().map(|(p, d)| (p.as_path(), d.as_str())).collect();
             let prompt = handoff::prompt(&from_name, &reply, &mine, &theirs);
             let paused = next > handoff::MAX_HOPS;
-            target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false });
             let to_name = target.name.clone();
+            target.msgs.push(Msg::Handoff { from: from_name.clone(), color, prompt: prompt.clone(), text: reply.clone(), paused, open: false, room: stays });
             if let Some(s) = self.bots.iter_mut().find(|b| b.id == from) {
                 s.msgs.push(Msg::Sent { to: to_name.clone() });
+            }
+            if let Some(rid) = stays {
+                self.log_handoff(rid, from, &from_name, color, to, &to_name, paused);
             }
             if paused {
                 self.alert(to, "Chain paused", &format!("{from_name} handed off to {to_name} after {} hops. Open eggbot to continue.", handoff::MAX_HOPS));
             } else {
-                self.deliver(to, handoff::Pending::handoff(prompt, next), cx);
+                let mut pending = handoff::Pending::handoff(prompt, next);
+                pending.room = stays;
+                self.deliver(to, pending, cx);
             }
         }
         handed
+    }
+
+    fn log_reply(&mut self, room_id: usize, bot_id: usize, text: &str) {
+        let Some((name, color)) = self.bots.iter().find(|b| b.id == bot_id).map(|b| (b.name.clone(), b.color())) else { return };
+        let open = self.open_room == Some(room_id);
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        if room.record_reply(bot_id, &name, color, text) && !open {
+            room.unread = true;
+        }
+    }
+
+    fn log_handoff(&mut self, room_id: usize, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
+        let open = self.open_room == Some(room_id);
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        room.record_handoff(from, from_name, color, to, to_name, paused);
+        if !open {
+            room.unread = true;
+        }
+    }
+
+    fn log_trouble(&mut self, room_id: usize, bot_id: usize, text: &str) {
+        let Some(name) = self.bots.iter().find(|b| b.id == bot_id).map(|b| b.name.clone()) else { return };
+        let open = self.open_room == Some(room_id);
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        if room.record_trouble(bot_id, &name, text) && !open {
+            room.unread = true;
+        }
     }
 
     /// Starts due schedules the usage guard is willing to run. Held ones keep their anchor.
@@ -1423,15 +1516,34 @@ impl Eggbot {
             return;
         }
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
-        if let Some(Msg::Handoff { prompt, paused, .. }) = bot.msgs.get_mut(i)
-            && *paused
+        let resumed = match bot.msgs.get_mut(i) {
+            Some(Msg::Handoff { prompt, paused, room, .. }) if *paused => {
+                *paused = false;
+                Some((prompt.clone(), *room))
+            }
+            _ => None,
+        };
+        let Some((prompt, room_id)) = resumed else { return };
+        if let Some(rid) = room_id
+            && let Some(room) = self.rooms.iter_mut().find(|r| r.id == rid)
         {
-            *paused = false;
-            let prompt = prompt.clone();
-            self.deliver(id, handoff::Pending::handoff(prompt, 0), cx);
-            self.save();
-            cx.notify();
+            room.resume(id);
         }
+        let mut pending = handoff::Pending::handoff(prompt, 0);
+        pending.room = room_id;
+        self.deliver(id, pending, cx);
+        self.save();
+        cx.notify();
+    }
+
+    /// Continues the paused in-room handoff that landed on `bot_id`.
+    fn continue_room(&mut self, room_id: usize, bot_id: usize, cx: &mut Context<Self>) {
+        let Some(i) = self.bots.iter().find(|b| b.id == bot_id).and_then(|b| {
+            b.msgs.iter().rposition(|m| matches!(m, Msg::Handoff { paused: true, room: Some(rid), .. } if *rid == room_id))
+        }) else {
+            return;
+        };
+        self.continue_chain(bot_id, i, cx);
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -1499,17 +1611,19 @@ impl Eggbot {
                 bot.retried = false;
                 // turn finished: a later save must not look like a crash mid-handoff
                 let finished = bot.current.take();
-                let ok = !bot.stopped && error.is_none();
-                let failed = error.clone().filter(|_| !bot.stopped);
-                match (bot.stopped, error) {
+                let room_id = finished.as_ref().and_then(|p| p.room);
+                let stopped = bot.stopped;
+                let ok = !stopped && error.is_none();
+                let failed = error.clone().filter(|_| !stopped);
+                match (stopped, error) {
                     (true, _) => bot.msgs.push(Msg::Error("Stopped.".into())),
                     (false, Some(e)) => bot.msgs.push(Msg::Error(e)),
                     _ => {}
                 }
-                // this turn's reply = bot text since the message that started it
-                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. } | Msg::Scheduled { .. } | Msg::Kickoff { .. })).map_or(0, |i| i + 1);
-                let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
-                let (reply, hops) = (reply.join("\n\n"), bot.hops);
+                // this turn's reply = bot text written after it started, not an earlier marker still sitting above
+                let start = bot.reply_from.min(bot.msgs.len());
+                let reply = reply_text(&bot.msgs, start);
+                let hops = bot.hops;
                 // a scheduled run with nothing to say stays out of the way
                 let quiet = ok && bot.fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
                 if quiet {
@@ -1537,11 +1651,24 @@ impl Eggbot {
                     bot.context.0 = 0;
                     bot.msgs.push(Msg::Divider("New session · notes kept".into()));
                 }
-                let handed = ok && !refreshed && !quiet && self.hand_off(id, reply.clone(), hops, cx);
-                match failed {
-                    Some(e) => self.alert(id, &format!("{name} needs you"), &e),
-                    None if ok && !quiet && !handed => self.alert(id, &name, &reply),
-                    None => {}
+                if ok && !refreshed && !quiet && let Some(rid) = room_id {
+                    self.log_reply(rid, id, &reply);
+                }
+                let handed = ok && !refreshed && !quiet && self.hand_off(id, reply.clone(), hops, room_id, cx);
+                match (stopped, failed) {
+                    (false, Some(e)) => {
+                        if let Some(rid) = room_id {
+                            self.log_trouble(rid, id, &e);
+                        }
+                        self.alert(id, &format!("{name} needs you"), &e);
+                    }
+                    (true, _) => {
+                        if let Some(rid) = room_id {
+                            self.log_trouble(rid, id, "Stopped.");
+                        }
+                    }
+                    (false, None) if ok && !quiet && !handed => self.alert(id, &name, &reply),
+                    _ => {}
                 }
                 // over the limit: leave the persisted queue alone
                 let next = if !engine_down && self.may_start(provider) {
@@ -1563,14 +1690,10 @@ impl Eggbot {
         cx.notify();
     }
 
-    /// Closing a room brings its dot back when a member still has news.
+    /// Closing a room leaves its dot off. Opening it already counted as reading the transcript.
     fn leave_room(&mut self) {
-        let Some(id) = self.open_room.take() else { return };
-        self.confirm_delete_room = None;
-        let hot = self.rooms.iter().find(|r| r.id == id).is_some_and(|r| self.bots.iter().any(|b| b.unread && r.members.contains(&b.id)));
-        if hot && let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
-            room.unread = true;
-            self.save();
+        if self.open_room.take().is_some() {
+            self.confirm_delete_room = None;
         }
     }
 
@@ -1686,9 +1809,10 @@ impl Eggbot {
         // deliver() is the only door: pause, throttle, and a busy bot all stay on the persisted queue
         let held = !self.may_start(provider);
         if let Some(bot) = self.bots.iter_mut().find(|b| b.id == facilitator) {
-            bot.msgs.push(Msg::Kickoff { room_id: id, room: title, text: kickoff, prompt: prompt.clone() });
+            bot.msgs.push(Msg::Kickoff { room_id: id, room: title, text: kickoff.clone(), prompt: prompt.clone() });
         }
         if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+            room.record_kickoff(facilitator, &name, &kickoff);
             room.started = true;
             room.unread = false;
         }
@@ -1698,10 +1822,12 @@ impl Eggbot {
         } else if busy || queued {
             format!("{name} is busy, so the kickoff waits in their queue.")
         } else {
-            format!("Kickoff sent to {name}. Open their chat to read the reply.")
+            format!("Kickoff sent to {name}.")
         });
         // hop 0 so this round does not spend the chain limit; a quit resumes it like any other handoff
-        self.deliver(facilitator, handoff::Pending::handoff(prompt, 0), cx);
+        let mut pending = handoff::Pending::handoff(prompt, 0);
+        pending.room = Some(id);
+        self.deliver(facilitator, pending, cx);
     }
 
     fn focus_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2065,7 +2191,9 @@ mod persist_tests {
         let bot: Bot = serde_json::from_str(saved).unwrap();
         assert_eq!(bot.queue.len(), 1);
         assert!(bot.queue[0].inflight());
+        assert!(bot.queue[0].room.is_none());
         assert_eq!(bot.current.as_ref().map(|p| p.hops), Some(1));
+        assert!(bot.current.as_ref().unwrap().room.is_none());
         let restored = handoff::restore(bot.current, bot.queue);
         assert_eq!(restored.len(), 2);
         assert_eq!(restored[0].prompt, "look");
@@ -2086,10 +2214,12 @@ mod persist_tests {
         assert_eq!(bot.skills.len(), 1);
         assert_eq!(bot.skills[0].body, "Run tests.");
         assert_eq!(bot.queue[0].prompt, "ship it");
+        assert!(bot.queue[0].room.is_none());
         assert_eq!(bot.folders[0].name, "proj");
         let again: Bot = serde_json::from_str(&serde_json::to_string(&bot).unwrap()).unwrap();
         assert_eq!(again.skills, bot.skills);
         assert_eq!(again.queue[0].prompt, "ship it");
+        assert!(again.queue[0].room.is_none());
         assert_eq!(again.folders[0].name, "proj");
         assert!(again.current.is_none());
     }
@@ -2218,16 +2348,38 @@ mod tests {
         assert_eq!(saved.rooms[0].members, vec![1, 2]);
         assert_eq!(saved.rooms[0].facilitator, Some(1));
         assert!(saved.rooms[0].unread && saved.rooms[0].started);
+        assert!(saved.rooms[0].transcript.is_empty());
         assert_eq!(saved.throttle, super::usage::DEFAULT_THROTTLE);
         assert_eq!(saved.pause, super::usage::DEFAULT_PAUSE);
+        let with_log: Saved = serde_json::from_str(r#"{"next_id":1,"bots":[],"rooms":[{"id":1,"title":"S","kickoff":"Hi","members":[1],"transcript":[{"Kickoff":{"to":1,"name":"Reviewer","text":"Hi"}},{"Reply":{"bot":1,"name":"Reviewer","color":1,"text":"Done"}},{"Handoff":{"from":1,"from_name":"Reviewer","color":1,"to":2,"to_name":"Implementer","paused":false}}]}]}"#).unwrap();
+        assert_eq!(with_log.rooms[0].transcript.len(), 3);
+        let again: Saved = serde_json::from_str(&serde_json::to_string(&with_log).unwrap()).unwrap();
+        assert_eq!(again.rooms[0].transcript, with_log.rooms[0].transcript);
     }
 
     #[test]
     fn room_kickoff_resumes_like_a_handoff_without_spending_a_hop() {
         let prompt = super::room::prompt("Standup", "What shipped?", &[super::room::Peer { name: "Implementer", blurb: "Writes code" }]);
-        let turn = super::handoff::Pending::handoff(prompt, 0);
+        let mut turn = super::handoff::Pending::handoff(prompt, 0);
+        turn.room = Some(4);
         assert!(turn.inflight());
         assert_eq!(turn.hops, 0);
         assert!(!turn.fresh);
+        let restored = super::handoff::restore(Some(turn), vec![]);
+        assert_eq!(restored[0].room, Some(4));
+        assert_eq!(restored[0].hops, 0);
+    }
+
+    #[test]
+    fn reply_text_ignores_lines_from_before_the_turn() {
+        let msgs = vec![
+            super::Msg::Bot("earlier".into()),
+            super::Msg::Kickoff { room_id: 1, room: "Standup".into(), text: "go".into(), prompt: "prompt".into() },
+            super::Msg::Bot("partial".into()),
+            super::Msg::User("meanwhile".into()),
+            super::Msg::Bot("other".into()),
+        ];
+        assert_eq!(super::reply_text(&msgs, 4), "other");
+        assert_eq!(super::reply_text(&msgs, msgs.len()), "");
     }
 }
