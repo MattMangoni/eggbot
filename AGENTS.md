@@ -24,6 +24,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/claude.rs` — shared agent types (`Provider`, `Ev`, `Turn`, `Handle`, `Meter`) and the `claude -p` runner + stream-json parser (tested).
 - `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
+- `src/room.rs` — room roster and kickoff prompt (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
 - `src/usage.rs` — plan-usage guard: throttle and pause thresholds (tested).
 - `src/tray.rs` — menu bar egg icon (unread badge) and menu.

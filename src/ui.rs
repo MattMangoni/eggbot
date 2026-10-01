@@ -207,7 +207,7 @@ impl Eggbot {
                 .px_2()
                 .rounded(px(8.))
                 .cursor_pointer()
-                .when(i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
+                .when(self.open_room.is_some() || i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
                 .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
                 // drag a row onto another to reorder
                 .on_drag(DraggedBot { ix: i, name: b.name.clone().into(), color: b.color(), p }, move |d, _, _, cx| {
@@ -313,7 +313,7 @@ impl Eggbot {
                     .flex_col()
                     .px_2()
                     .pt_1()
-                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(!self.bots.is_empty(), |d| d.child(highlight)).children(rows))
+                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(self.open_room.is_none() && !self.bots.is_empty(), |d| d.child(highlight)).children(rows))
                     // the space below the last bot: drop here to move a bot to the end
                     .child(
                         div()
@@ -326,9 +326,78 @@ impl Eggbot {
                             .child(drop_line("bots-end".into(), self.bots.len(), self.dragging)),
                     ),
             )
+            .child(self.rooms_nav(cx))
             .children(self.meters.iter().map(|m| self.usage_meter(m)))
             .child(div().h_3())
             .child(handle)
+    }
+
+    /// Rooms sit under the bot list: a title, who is in, and a dot when a member has news.
+    fn rooms_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let rows = self.rooms.iter().map(|r| {
+            let id = r.id;
+            let on = self.open_room == Some(id);
+            let fac = r.facilitator.and_then(|fid| self.bots.iter().find(|b| b.id == fid));
+            let subtitle = match (fac, r.members.len()) {
+                (Some(b), n) if n > 1 => format!("{} + {}", b.name, n - 1),
+                (Some(b), _) => b.name.clone(),
+                _ => "No bots yet".into(),
+            };
+            div()
+                .id(("room", id))
+                .h(px(36.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.tint))
+                .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+                .on_click(cx.listener(move |this, _, window, cx| this.show_room(id, window, cx)))
+                .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().child(div().size(px(8.)).rounded(px(2.)).border_1().border_color(if on { p.ink } else { p.muted })))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .overflow_hidden()
+                        .child(div().text_sm().text_color(p.ink).truncate().child(r.title.clone()))
+                        .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
+                )
+                .when(r.unread && !on, |d| d.child(div().size(px(7.)).flex_none().rounded_full().bg(p.ink)))
+        });
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .border_t_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .pl_4()
+                    .pr_2()
+                    .child(div().flex_1().text_xs().text_color(p.muted).child("Rooms"))
+                    .child(
+                        div()
+                            .id("new-room")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .text_color(p.muted)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.hover).text_color(p.ink))
+                            .on_click(cx.listener(|this, _, window, cx| this.new_room(window, cx)))
+                            .child(Icon::new(IconName::Plus).size_4()),
+                    ),
+            )
+            .child(div().id("room-list").max_h(px(160.)).overflow_y_scroll().flex().flex_col().px_2().pb_1().children(rows))
     }
 
     fn usage_meter(&self, meter: &Meter) -> impl IntoElement {
@@ -532,6 +601,9 @@ impl Eggbot {
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().bg(p.bg);
         if let Some(setup) = &self.setup {
             return main.child(div().h(px(44.)).flex_none()).child(self.setup_view(setup, cx)).into_any_element();
+        }
+        if self.open_room.is_some() {
+            return self.room_view(cx);
         }
         let Some(bot) = self.bots.get(self.selected) else {
             return main
@@ -911,6 +983,128 @@ impl Eggbot {
         )
     }
 
+    /// Title, kickoff, and roster. Start talks to the facilitator; peers join through @Name.
+    fn room_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.p;
+        let Some(room) = self.open_room.and_then(|id| self.rooms.iter().find(|r| r.id == id)).cloned() else {
+            return div().flex_1().into_any_element();
+        };
+        let why = crate::room::block(&room.title, &room.kickoff, &room.members, room.facilitator);
+        let room_id = room.id;
+        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
+        let field = || div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line);
+        let members: Vec<_> = self.bots.iter().map(|b| {
+            let (bot_id, on, fac) = (b.id, room.members.contains(&b.id), room.facilitator == Some(b.id));
+            let (unread, busy) = (b.unread, b.busy());
+            div()
+                .id(("member", bot_id))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_1()
+                .py_1()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|d| d.bg(p.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_member(room_id, bot_id, cx)))
+                .child(div().size(px(16.)).flex_none().rounded(px(4.)).border_1().border_color(if on { p.ink } else { p.line }).when(on, |d| d.bg(p.ink)))
+                .child(egg(format!("room-{bot_id}"), hex(b.color()), 14., b.mood()))
+                .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
+                .when(busy, |d| d.child(Spinner::new().color(p.muted).xsmall()))
+                .when(on && fac, |d| d.child(div().text_xs().text_color(p.muted).child("Facilitator")))
+                .when(on && !fac, |d| {
+                    d.child(
+                        div()
+                            .id(("fac", bot_id))
+                            .text_xs()
+                            .text_color(p.muted)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(p.ink))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.set_facilitator(room_id, bot_id, cx);
+                            }))
+                            .child("Make facilitator"),
+                    )
+                })
+                .child(
+                    div()
+                        .id(("open-bot", bot_id))
+                        .text_xs()
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            if let Some(i) = this.bots.iter().position(|b| b.id == bot_id) {
+                                this.select(i, window, cx);
+                            }
+                        }))
+                        .child(if unread { "Open · new" } else { "Open" }),
+                )
+        }).collect();
+        let confirming = self.confirm_delete_room == Some(room_id);
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(p.bg)
+            .child(
+                div()
+                    .h(px(44.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .when(!self.sidebar_open, |d| d.pl(px(TRAFFIC_INSET)))
+                    .border_b_1()
+                    .border_color(p.line)
+                    .child(div().text_sm().text_color(p.muted).child("Rooms"))
+                    .child(div().text_sm().text_color(p.muted).child("/"))
+                    .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(room.title.clone())),
+            )
+            .when(self.settings_open, |d| d.child(self.settings(cx)))
+            .child(
+                div().id("room-body").flex_1().overflow_y_scroll().child(
+                    div().px_6().pb_8().child(
+                        self.panel()
+                            .child(div().flex().flex_col().gap_1().child(label("Title")).child(field().child(Input::new(&self.room_title).appearance(false))))
+                            .child(div().flex().flex_col().gap_1().child(label("Kickoff")).child(field().child(Textarea::new(&self.room_kickoff).appearance(false))))
+                            .child(div().text_xs().text_color(p.muted).child("Start sends this to the facilitator only. They hand work to the other bots with @Name. There is no lead."))
+                            .child(div().h(px(1.)).bg(p.line))
+                            .child(label("Bots"))
+                            .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
+                            .children(members)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .pt_1()
+                                    .child(div().flex_1())
+                                    .when_some(self.room_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
+                                    .when(self.room_error.is_none(), |d| d.when_some(self.room_status.clone(), |d, s| d.child(div().flex_1().text_xs().text_color(p.muted).child(s))))
+                                    .child(
+                                        button("delete-room", p)
+                                            .on_click(cx.listener(move |this, _, _, cx| this.delete_room(room_id, cx)))
+                                            .child(if confirming { "Delete room?" } else { "Delete" }),
+                                    )
+                                    .child(
+                                        primary("start-room", p)
+                                            .when(why.is_some(), |d| d.opacity(0.4))
+                                            .on_click(cx.listener(move |this, _, _, cx| this.start_room(cx)))
+                                            .child(if room.started { "Start again" } else { "Start" }),
+                                    ),
+                            ),
+                    ),
+                ),
+            )
+            .into_any_element()
+    }
+
     /// Settings (⌘,): start at login, and instructions every bot gets.
     fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
@@ -1078,6 +1272,32 @@ impl Eggbot {
         let p = self.p;
         let el = match m {
             Msg::User(t) => div().flex().justify_end().child(div().max_w(relative(0.75)).px_4().py_2().rounded(px(18.)).bg(p.bubble).text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(t.clone())),
+            Msg::Kickoff { room_id, room, text, .. } => {
+                let room_id = *room_id;
+                let title = room.clone();
+                div().flex().justify_end().child(
+                    div()
+                        .max_w(relative(0.75))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_4()
+                        .py_2()
+                        .rounded(px(18.))
+                        .bg(p.bubble)
+                        .child(
+                            div()
+                                .id(("kickoff", i))
+                                .text_xs()
+                                .text_color(p.muted)
+                                .cursor_pointer()
+                                .hover(|d| d.text_color(p.ink))
+                                .on_click(cx.listener(move |this, _, window, cx| this.show_room(room_id, window, cx)))
+                                .child(format!("Room · {title}")),
+                        )
+                        .child(div().text_color(p.ink).child(text.clone())),
+                )
+            }
             Msg::Bot(t) => div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true)),
             Msg::Handoff { from, color, text, paused, open, .. } => {
                 let (id, open, paused, from_name) = (bot.id, *open, *paused, from.clone());
@@ -1264,7 +1484,7 @@ impl Render for Eggbot {
                 this.menu_open = !this.menu_open;
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &FocusInput, window, cx| this.input.update(cx, |s, cx| s.focus(window, cx))))
+            .on_action(cx.listener(|this, _: &FocusInput, window, cx| this.focus_main(window, cx)))
             .on_action(cx.listener(|this, _: &PrevBot, window, cx| {
                 if this.selected > 0 {
                     this.select(this.selected - 1, window, cx);

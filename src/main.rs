@@ -3,6 +3,7 @@ mod codex;
 mod egg;
 mod handoff;
 mod login;
+mod room;
 mod notify;
 mod sandbox;
 mod schedule;
@@ -256,13 +257,15 @@ enum Msg {
     Scheduled { prompt: String, label: String },
     /// Replaces a "not signed in" error once the login works; `prompt` is what failed, for "Send again".
     SignedIn { provider: Provider, prompt: Option<String> },
+    /// A room kickoff, shown in the facilitator's chat. `prompt` is what the bot was told.
+    Kickoff { room_id: usize, room: String, text: String, prompt: String },
 }
 
 impl Msg {
     /// The text search looks in: what people and bots wrote, not tool output.
     fn searchable(&self) -> Option<&str> {
         match self {
-            Msg::User(t) | Msg::Bot(t) | Msg::Handoff { text: t, .. } | Msg::Scheduled { prompt: t, .. } => Some(t),
+            Msg::User(t) | Msg::Bot(t) | Msg::Handoff { text: t, .. } | Msg::Scheduled { prompt: t, .. } | Msg::Kickoff { text: t, .. } => Some(t),
             _ => None,
         }
     }
@@ -400,6 +403,10 @@ struct Saved {
     /// Fraction where new turns wait. Missing in older state.json = 95%.
     #[serde(default = "default_pause")]
     pause: f32,
+    #[serde(default)]
+    next_room_id: usize,
+    #[serde(default)]
+    rooms: Vec<room::Room>,
 }
 
 fn default_sidebar() -> f32 {
@@ -477,6 +484,17 @@ struct Eggbot {
     setup: Option<Setup>,
     /// The sidebar row being dragged, to hide drop lines that would change nothing.
     dragging: Option<usize>,
+    rooms: Vec<room::Room>,
+    next_room_id: usize,
+    /// The room open in the main pane; None means the selected bot's chat.
+    open_room: Option<usize>,
+    room_title: Entity<InputState>,
+    room_kickoff: Entity<TextareaState>,
+    room_error: Option<String>,
+    /// Set after Start: sent, or waiting because the facilitator is busy.
+    room_status: Option<String>,
+    /// Room id whose Delete was clicked once.
+    confirm_delete_room: Option<usize>,
     /// Dragging the sidebar's edge.
     resizing: bool,
     /// The chat's virtual list: one row per message of the selected bot, plus the typing row.
@@ -528,6 +546,12 @@ impl Eggbot {
         });
         let limit_throttle = cx.new(|cx| InputState::new(window, cx).placeholder("90"));
         let limit_pause = cx.new(|cx| InputState::new(window, cx).placeholder("95"));
+        let room_title = cx.new(|cx| InputState::new(window, cx).placeholder("Daily standup"));
+        let room_kickoff = cx.new(|cx| {
+            let mut kickoff = TextareaState::new(window, cx).placeholder("What should this room do? e.g. Plan the sprint: goals, scope, who does what.");
+            kickoff.set_auto_grow(3, 8, cx);
+            kickoff
+        });
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
@@ -570,6 +594,18 @@ impl Eggbot {
             }
         })
         .detach();
+        cx.subscribe_in(&room_title, window, |this, _, ev: &InputEvent, _, cx| {
+            if let InputEvent::Change = ev {
+                this.room_title_changed(cx);
+            }
+        })
+        .detach();
+        cx.subscribe_in(&room_kickoff, window, |this, _, ev: &InputEvent, _, cx| {
+            if let InputEvent::Change = ev {
+                this.room_kickoff_changed(cx);
+            }
+        })
+        .detach();
         for field in [&sched_prompt, &sched_value] {
             cx.subscribe_in(field, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -605,14 +641,17 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
-            Some(s) if !s.bots.is_empty() => {
+            Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared, this.throttle, this.pause) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
                 for b in &mut this.bots {
                     sandbox::adopt_legacy(&mut b.folders, b.folder.take());
                 }
+                this.rooms = s.rooms;
+                let used = this.rooms.iter().map(|r| r.id.saturating_add(1)).max().unwrap_or(0);
+                this.next_room_id = s.next_room_id.max(used);
                 this.restore_handoffs();
             }
             _ => {
@@ -745,7 +784,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -755,6 +794,7 @@ impl Eggbot {
     }
 
     fn hatch(&mut self, preset: usize) {
+        self.leave_room();
         let base = PRESETS[preset].name;
         let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
         let name = (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap();
@@ -794,6 +834,7 @@ impl Eggbot {
     }
 
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_room();
         self.selected = i;
         self.mark_read(cx);
         self.selects_stale = true;
@@ -925,22 +966,40 @@ impl Eggbot {
         self.find_open.then(|| self.find_hits.get(self.find_at).copied()).flatten()
     }
 
-    /// The selected bot has been seen.
+    /// The selected bot has been seen. A room dot clears once none of its bots are still unread.
     fn mark_read(&mut self, cx: &mut Context<Self>) {
-        if let Some(b) = self.bots.get_mut(self.selected).filter(|b| b.unread) {
-            b.unread = false;
-            self.save();
-            cx.notify();
+        if self.open_room.is_some() {
+            return;
+        }
+        let Some(b) = self.bots.get_mut(self.selected).filter(|b| b.unread) else { return };
+        b.unread = false;
+        self.clear_idle_rooms();
+        self.save();
+        cx.notify();
+    }
+
+    /// Drops a room dot when the news was read in a member's chat.
+    fn clear_idle_rooms(&mut self) {
+        let unread: Vec<usize> = self.bots.iter().filter(|b| b.unread).map(|b| b.id).collect();
+        for room in &mut self.rooms {
+            if room.unread && !room.members.iter().any(|id| unread.contains(id)) {
+                room.unread = false;
+            }
         }
     }
 
     /// News from a bot: unread unless the user is looking at it, and a notification while eggbot is in the background.
+    /// Rooms that include the bot are unread too, unless that room is open.
     fn alert(&mut self, id: usize, title: &str, body: &str) {
-        if self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id) {
-            return;
-        }
-        if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
-            b.unread = true;
+        let seeing = self.open_room.is_none() && self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id);
+        if !seeing {
+            if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+                b.unread = true;
+            }
+            let open = self.open_room;
+            for room in self.rooms.iter_mut().filter(|r| open != Some(r.id) && r.members.contains(&id)) {
+                room.unread = true;
+            }
         }
         if !self.active {
             let body: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
@@ -1361,7 +1420,7 @@ impl Eggbot {
                     _ => {}
                 }
                 // this turn's reply = bot text since the message that started it
-                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. } | Msg::Scheduled { .. })).map_or(0, |i| i + 1);
+                let start = bot.msgs.iter().rposition(|m| matches!(m, Msg::User(_) | Msg::Handoff { .. } | Msg::Scheduled { .. } | Msg::Kickoff { .. })).map_or(0, |i| i + 1);
                 let reply: Vec<&str> = bot.msgs[start..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect();
                 let (reply, hops) = (reply.join("\n\n"), bot.hops);
                 // a scheduled run with nothing to say stays out of the way
@@ -1417,6 +1476,155 @@ impl Eggbot {
         cx.notify();
     }
 
+    /// Closing a room brings its dot back when a member still has news.
+    fn leave_room(&mut self) {
+        let Some(id) = self.open_room.take() else { return };
+        self.confirm_delete_room = None;
+        let hot = self.rooms.iter().find(|r| r.id == id).is_some_and(|r| self.bots.iter().any(|b| b.unread && r.members.contains(&b.id)));
+        if hot && let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+            room.unread = true;
+            self.save();
+        }
+    }
+
+    fn show_room(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_room == Some(id) {
+            return;
+        }
+        let Some(room) = self.rooms.iter().find(|r| r.id == id) else { return };
+        let (title, kickoff) = (room.title.clone(), room.kickoff.clone());
+        self.leave_room();
+        if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+            room.unread = false;
+        }
+        self.open_room = Some(id);
+        (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
+        (self.menu_open, self.edit_open, self.sched_open, self.settings_open) = (false, false, false, false);
+        (self.find_open, self.find_hits) = (false, vec![]);
+        self.room_title.update(cx, |s, cx| {
+            s.set_value(title, window, cx);
+            s.focus(window, cx);
+        });
+        self.room_kickoff.update(cx, |s, cx| s.set_value(kickoff, window, cx));
+        self.save();
+        cx.notify();
+    }
+
+    fn new_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let taken = |n: &str| self.rooms.iter().any(|r| r.title == n);
+        let title = (1..).map(|i| if i == 1 { "Room".to_string() } else { format!("Room {i}") }).find(|n| !taken(n)).unwrap();
+        let id = self.next_room_id;
+        self.next_room_id += 1;
+        self.rooms.push(room::Room::new(id, title));
+        self.show_room(id, window, cx);
+    }
+
+    fn room_title_changed(&mut self, cx: &mut Context<Self>) {
+        self.write_room(true, cx);
+    }
+
+    fn room_kickoff_changed(&mut self, cx: &mut Context<Self>) {
+        self.write_room(false, cx);
+    }
+
+    fn write_room(&mut self, title: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.open_room else { return };
+        let value = if title { self.room_title.read(cx).value().to_string() } else { self.room_kickoff.read(cx).value().to_string() };
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) else { return };
+        if title {
+            room.title = value;
+        } else {
+            room.kickoff = value;
+        }
+        (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
+        self.save();
+        cx.notify();
+    }
+
+    fn toggle_member(&mut self, room_id: usize, bot_id: usize, cx: &mut Context<Self>) {
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        (room.members, room.facilitator) = room::toggle(std::mem::take(&mut room.members), room.facilitator, bot_id);
+        (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
+        self.save();
+        cx.notify();
+    }
+
+    fn set_facilitator(&mut self, room_id: usize, bot_id: usize, cx: &mut Context<Self>) {
+        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        (room.members, room.facilitator) = room::facilitate(std::mem::take(&mut room.members), bot_id);
+        (self.room_error, self.room_status) = (None, None);
+        self.save();
+        cx.notify();
+    }
+
+    fn delete_room(&mut self, id: usize, cx: &mut Context<Self>) {
+        if self.confirm_delete_room != Some(id) {
+            self.confirm_delete_room = Some(id);
+            cx.notify();
+            return;
+        }
+        self.rooms.retain(|r| r.id != id);
+        if self.open_room == Some(id) {
+            self.open_room = None;
+        }
+        self.confirm_delete_room = None;
+        self.save();
+        cx.notify();
+    }
+
+    /// Sends the kickoff to the facilitator only. Peers join later through `@Name`.
+    fn start_room(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.open_room else { return };
+        let Some(room) = self.rooms.iter().find(|r| r.id == id) else { return };
+        let title = room.title.trim().to_string();
+        let kickoff = room.kickoff.trim().to_string();
+        if let Some(why) = room::block(&title, &kickoff, &room.members, room.facilitator) {
+            self.room_error = Some(why.into());
+            self.room_status = None;
+            cx.notify();
+            return;
+        }
+        let facilitator = room.facilitator.unwrap();
+        let members = room.members.clone();
+        let peers: Vec<(String, String)> = self.bots.iter().filter(|b| b.id != facilitator && members.contains(&b.id)).map(|b| (b.name.clone(), b.blurb())).collect();
+        let peer_refs: Vec<room::Peer<'_>> = peers.iter().map(|(name, blurb)| room::Peer { name, blurb }).collect();
+        let prompt = room::prompt(&title, &kickoff, &peer_refs);
+        let Some(name) = self.bots.iter().find(|b| b.id == facilitator).map(|b| b.name.clone()) else {
+            self.room_error = Some("That facilitator was deleted".into());
+            cx.notify();
+            return;
+        };
+        let facilitator_bot = self.bots.iter().find(|b| b.id == facilitator);
+        let (busy, queued, provider) = facilitator_bot.map(|b| (b.busy(), !b.queue.is_empty(), b.provider)).unwrap_or((false, false, Provider::Claude));
+        // deliver() is the only door: pause, throttle, and a busy bot all stay on the persisted queue
+        let held = !self.may_start(provider);
+        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == facilitator) {
+            bot.msgs.push(Msg::Kickoff { room_id: id, room: title, text: kickoff, prompt: prompt.clone() });
+        }
+        if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+            room.started = true;
+            room.unread = false;
+        }
+        self.room_error = None;
+        self.room_status = Some(if held {
+            format!("{name}'s plan is at its limit, so the kickoff waits in their queue.")
+        } else if busy || queued {
+            format!("{name} is busy, so the kickoff waits in their queue.")
+        } else {
+            format!("Kickoff sent to {name}. Open their chat to read the reply.")
+        });
+        // hop 0 so this round does not spend the chain limit; a quit resumes it like any other handoff
+        self.deliver(facilitator, handoff::Pending::handoff(prompt, 0), cx);
+    }
+
+    fn focus_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_room.is_some() {
+            self.room_kickoff.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            self.input.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
     /// Deletes the bot, its container and its scratch folder; never a mounted folder.
     fn delete(&mut self, id: usize, cx: &mut Context<Self>) {
         let Some(i) = self.bots.iter().position(|b| b.id == id) else { return };
@@ -1424,6 +1632,9 @@ impl Eggbot {
             run.stop();
         }
         self.bots.remove(i);
+        for room in &mut self.rooms {
+            (room.members, room.facilitator) = room::forget(std::mem::take(&mut room.members), room.facilitator, id);
+        }
         self.selected = self.selected.min(self.bots.len().saturating_sub(1));
         self.confirm_delete = None;
         self.save();
@@ -1508,7 +1719,7 @@ impl Eggbot {
             let Some(k) = bot.msgs.iter().rposition(|m| matches!(m, Msg::Error(t) if t.contains(marker))) else { continue };
             let prompt = bot.msgs[..k].iter().rev().find_map(|m| match m {
                 Msg::User(t) => Some(t.clone()),
-                Msg::Handoff { prompt, .. } | Msg::Scheduled { prompt, .. } => Some(prompt.clone()),
+                Msg::Handoff { prompt, .. } | Msg::Scheduled { prompt, .. } | Msg::Kickoff { prompt, .. } => Some(prompt.clone()),
                 _ => None,
             });
             bot.msgs[k] = Msg::SignedIn { provider, prompt };
@@ -1788,18 +1999,21 @@ mod persist_tests {
         assert_eq!(saved.bots[0].current.as_ref().map(|p| p.prompt.as_str()), Some("look"));
         assert_eq!(saved.bots[0].folders[0].name, "proj");
         // same keys save() writes; queue, current, and folders ride inside bots
-        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause });
+        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause, "next_room_id": saved.next_room_id, "rooms": saved.rooms });
         let again: Saved = serde_json::from_value(state).unwrap();
         assert_eq!(again.bots[0].queue[0].prompt, "ship it");
         assert_eq!(again.bots[0].current.as_ref().unwrap().hops, 1);
         assert_eq!(again.bots[0].folders[0].name, "proj");
         assert!(again.bots[0].folder.is_none());
         assert_eq!(usage::percent(again.pause), 95);
+        assert!(saved.rooms.is_empty());
+        assert_eq!(again.next_room_id, 0);
 
         let legacy = r#"{"next_id":1,"bots":[]}"#;
         let old: Saved = serde_json::from_str(legacy).unwrap();
         assert_eq!(old.throttle, usage::DEFAULT_THROTTLE);
         assert_eq!(old.pause, usage::DEFAULT_PAUSE);
+        assert!(old.rooms.is_empty());
     }
 }
 
@@ -1884,5 +2098,29 @@ mod tests {
         assert_eq!(saved["folders"][0]["path"].as_str(), Some(path.as_ref()));
         assert_eq!(saved["folders"][0]["name"], bot.folders[0].name);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rooms_round_trip_and_old_state_has_none() {
+        let old: Saved = serde_json::from_str(r#"{"next_id":0,"bots":[]}"#).unwrap();
+        assert!(old.rooms.is_empty());
+        assert_eq!(old.next_room_id, 0);
+        let saved: Saved = serde_json::from_str(r#"{"next_id":2,"bots":[],"next_room_id":4,"rooms":[{"id":3,"title":"Standup","kickoff":"What shipped?","members":[1,2],"facilitator":1,"unread":true,"started":true}]}"#).unwrap();
+        assert_eq!(saved.next_room_id, 4);
+        assert_eq!(saved.rooms[0].title, "Standup");
+        assert_eq!(saved.rooms[0].members, vec![1, 2]);
+        assert_eq!(saved.rooms[0].facilitator, Some(1));
+        assert!(saved.rooms[0].unread && saved.rooms[0].started);
+        assert_eq!(saved.throttle, super::usage::DEFAULT_THROTTLE);
+        assert_eq!(saved.pause, super::usage::DEFAULT_PAUSE);
+    }
+
+    #[test]
+    fn room_kickoff_resumes_like_a_handoff_without_spending_a_hop() {
+        let prompt = super::room::prompt("Standup", "What shipped?", &[super::room::Peer { name: "Implementer", blurb: "Writes code" }]);
+        let turn = super::handoff::Pending::handoff(prompt, 0);
+        assert!(turn.inflight());
+        assert_eq!(turn.hops, 0);
+        assert!(!turn.fresh);
     }
 }
