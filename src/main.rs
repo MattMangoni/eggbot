@@ -303,9 +303,9 @@ struct Bot {
     /// Handoff hops that led to the current turn (0 = started by the user).
     #[serde(skip)]
     hops: u32,
-    /// Handoffs waiting for the current turn to end: (prompt, hops).
-    #[serde(skip)]
-    queue: Vec<(String, u32, bool)>,
+    /// Turns waiting for this one to finish (handoffs, and schedules that arrived mid-turn).
+    #[serde(default)]
+    queue: Vec<handoff::Pending>,
     /// The running turn uses a throwaway session (schedules): its session id and context are not kept.
     #[serde(skip)]
     fresh_turn: bool,
@@ -324,9 +324,9 @@ struct Bot {
     /// Something arrived that the user has not seen yet.
     #[serde(default)]
     unread: bool,
-    /// The running turn's (prompt, hops, fresh), to run it again after a sign-in clash.
-    #[serde(skip)]
-    current: Option<(String, u32, bool)>,
+    /// The running turn. Retried after a sign-in clash, and restored when it is a handoff.
+    #[serde(default)]
+    current: Option<handoff::Pending>,
     /// The running turn is already that one retry.
     #[serde(skip)]
     retried: bool,
@@ -405,6 +405,8 @@ struct Eggbot {
     selected: usize,
     next_id: usize,
     menu_open: bool,
+    /// Quit is in progress: don't drop the running handoff out of `current`.
+    quitting: bool,
     /// Bot id whose trash icon was clicked once; a second click deletes.
     confirm_delete: Option<usize>,
     meters: Vec<Meter>,
@@ -551,6 +553,17 @@ impl Eggbot {
             let mut wait = Duration::from_secs(3);
             loop {
                 cx.background_executor().timer(wait).await;
+                let needs_docker = match this.update(cx, |this, _| this.bots.iter().any(|b| !b.busy() && !b.queue.is_empty())) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                // docker info can block; only ask when a handoff is actually waiting
+                if needs_docker {
+                    let online = cx.background_executor().spawn(async { sandbox::running() }).await;
+                    if this.update(cx, |this, cx| this.pump_queues(online, cx)).is_err() {
+                        break;
+                    }
+                }
                 if this.update(cx, |this, cx| this.run_due(cx)).is_err() {
                     break;
                 }
@@ -562,11 +575,12 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared);
+                this.restore_handoffs();
             }
             _ => {
                 for i in 0..3 {
@@ -659,6 +673,8 @@ impl Eggbot {
     }
 
     fn quit_now(&mut self, cx: &mut Context<Self>) {
+        // Done arrives after the kill; it must not clear `current` or the in-flight handoff is lost
+        self.quitting = true;
         for b in self.bots.iter().filter(|b| b.busy()) {
             sandbox::interrupt(b.id);
         }
@@ -893,20 +909,22 @@ impl Eggbot {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
         bot.msgs.push(Msg::User(text.clone()));
         let id = bot.id;
-        self.start_turn(id, text, 0, false, cx);
+        self.start_turn(id, handoff::Pending::user(text), cx);
     }
 
-    /// `fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
-    fn start_turn(&mut self, id: usize, prompt: String, hops: u32, fresh: bool, cx: &mut Context<Self>) {
+    /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
+    fn start_turn(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
         let blurbs: Vec<String> = self.bots.iter().map(|b| b.blurb()).collect();
         let roster: Vec<(usize, &str, &str)> = self.bots.iter().zip(&blurbs).map(|(b, blurb)| (b.id, b.name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster, id);
         let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        let (hops, fresh) = (pending.hops, pending.fresh);
+        let prompt = pending.prompt.clone();
         bot.stopped = false;
         bot.hops = hops;
         bot.fresh_turn = fresh;
-        bot.current = Some((prompt.clone(), hops, fresh));
+        bot.current = Some(pending);
         // separate folders, so a bot without a project never sees its notes inside /work
         let home = data_dir().join("bots").join(id.to_string());
         let (scratch, memory) = (home.join("work"), home.join("memory"));
@@ -955,11 +973,48 @@ impl Eggbot {
     }
 
     /// Starts the turn now, or queues it behind the bot's current turn.
-    fn deliver(&mut self, id: usize, prompt: String, hops: u32, fresh: bool, cx: &mut Context<Self>) {
-        match self.bots.iter_mut().find(|b| b.id == id) {
-            Some(b) if b.busy() => b.queue.push((prompt, hops, fresh)),
-            Some(_) => self.start_turn(id, prompt, hops, fresh, cx),
-            None => {}
+    fn deliver(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
+        if self.bots.iter().any(|b| b.id == id && b.busy()) {
+            if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+                b.queue.push(pending);
+            }
+            // callers usually save later; this covers a crash in between
+            self.save();
+            return;
+        }
+        if self.bots.iter().any(|b| b.id == id) {
+            self.start_turn(id, pending, cx);
+        }
+    }
+
+    /// An in-flight @Name hop goes back on the queue. User turns and schedules stay stopped.
+    fn restore_handoffs(&mut self) {
+        let mut changed = false;
+        for b in &mut self.bots {
+            if b.current.is_none() {
+                continue;
+            }
+            changed = true;
+            let running = b.current.take();
+            b.queue = handoff::restore(running, std::mem::take(&mut b.queue));
+        }
+        if changed {
+            self.save();
+        }
+    }
+
+    /// Starts the head of each idle bot's queue once Docker answers. Offline keeps the queue.
+    fn pump_queues(&mut self, online: bool, cx: &mut Context<Self>) {
+        let mut starts = vec![];
+        for b in &mut self.bots {
+            let (next, queue) = handoff::dequeue(std::mem::take(&mut b.queue), b.busy(), !online);
+            b.queue = queue;
+            if let Some(pending) = next {
+                starts.push((b.id, pending));
+            }
+        }
+        for (id, pending) in starts {
+            self.start_turn(id, pending, cx);
         }
     }
 
@@ -983,7 +1038,7 @@ impl Eggbot {
             if paused {
                 self.alert(to, "Chain paused", &format!("{from_name} handed off to {to_name} after {} hops. Open eggbot to continue.", handoff::MAX_HOPS));
             } else {
-                self.deliver(to, prompt, next, false, cx);
+                self.deliver(to, handoff::Pending::handoff(prompt, next), cx);
             }
         }
         handed
@@ -1004,7 +1059,7 @@ impl Eggbot {
             return;
         }
         for (id, prompt) in due {
-            self.deliver(id, prompt, 0, true, cx);
+            self.deliver(id, handoff::Pending::schedule(prompt), cx);
         }
         self.save();
         cx.notify();
@@ -1088,7 +1143,7 @@ impl Eggbot {
         {
             *paused = false;
             let prompt = prompt.clone();
-            self.deliver(id, prompt, 0, false, cx);
+            self.deliver(id, handoff::Pending::handoff(prompt, 0), cx);
             self.save();
             cx.notify();
         }
@@ -1137,22 +1192,28 @@ impl Eggbot {
             }
             Ev::Done { error } => {
                 bot.run = None;
+                // quit_now already saved `current`; clearing it here would drop the hop
+                if self.quitting {
+                    return;
+                }
                 bot.msgs.retain(|m| !matches!(m, Msg::Bot(s) if s.is_empty()));
                 // documented transient error when bots renew the shared Claude login at the same moment
                 let clash = !bot.stopped && error.as_deref().is_some_and(|e| e.contains("process is refreshing it"));
                 if clash && !std::mem::take(&mut bot.retried)
-                    && let Some((prompt, hops, fresh)) = bot.current.clone()
+                    && let Some(pending) = bot.current.clone()
                 {
                     bot.retried = true;
                     cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(Duration::from_secs(5)).await;
-                        this.update(cx, |this, cx| this.deliver(id, prompt, hops, fresh, cx)).ok();
+                        this.update(cx, |this, cx| this.deliver(id, pending, cx)).ok();
                     })
                     .detach();
                     cx.notify();
                     return;
                 }
                 bot.retried = false;
+                // turn finished: a later save must not look like a crash mid-handoff
+                let finished = bot.current.take();
                 let ok = !bot.stopped && error.is_none();
                 let failed = error.clone().filter(|_| !bot.stopped);
                 match (bot.stopped, error) {
@@ -1172,7 +1233,12 @@ impl Eggbot {
                     bot.msgs.push(Msg::Divider("Nothing to report".into()));
                 }
                 let name = bot.name.clone();
-                let next = (!bot.queue.is_empty()).then(|| bot.queue.remove(0));
+                // engine down: keep the hop queued instead of starting it into the same failure
+                let engine_down = failed.as_deref().is_some_and(sandbox::engine_down);
+                if engine_down && let Some(turn) = finished.filter(handoff::Pending::inflight) {
+                    bot.queue.insert(0, turn);
+                }
+                let next = (!engine_down && !bot.queue.is_empty()).then(|| bot.queue.remove(0));
                 let refreshed = std::mem::take(&mut bot.refreshing);
                 if let Some(role) = bot.pending_role.take().filter(|_| ok) {
                     bot.codex_role = Some(role);
@@ -1192,8 +1258,8 @@ impl Eggbot {
                     None if ok && !quiet && !handed => self.alert(id, &name, &reply),
                     None => {}
                 }
-                if let Some((prompt, hops, fresh)) = next {
-                    self.start_turn(id, prompt, hops, fresh, cx);
+                if let Some(pending) = next {
+                    self.start_turn(id, pending, cx);
                 }
                 self.save();
             }
@@ -1294,7 +1360,7 @@ impl Eggbot {
         bot.refreshing = true;
         bot.msgs.push(Msg::Scheduled { prompt: "Save your notes before a fresh session.".into(), label: "Fresh start".into() });
         let id = bot.id;
-        self.start_turn(id, FRESH_START.into(), 0, false, cx);
+        self.start_turn(id, handoff::Pending::user(FRESH_START.into()), cx);
     }
 
     fn send_again(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
@@ -1306,7 +1372,7 @@ impl Eggbot {
             && let Some(text) = prompt.take()
         {
             bot.msgs.push(Msg::User(text.clone()));
-            self.start_turn(id, text, 0, false, cx);
+            self.start_turn(id, handoff::Pending::user(text), cx);
         }
     }
 
@@ -1474,6 +1540,28 @@ fn set_dock_icon(visible: bool) {
     if let Some(mtm) = objc2::MainThreadMarker::new() {
         let policy = if visible { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
         NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+
+    #[test]
+    fn handoff_queue_loads_from_state_json() {
+        let saved = r#"{"id":1,"name":"Reviewer","preset":0,"sandbox_session":null,"msgs":[],"queue":[{"prompt":"ship it","hops":2,"fresh":false,"handoff":true}],"current":{"prompt":"look","hops":1,"fresh":false,"handoff":true}}"#;
+        let bot: Bot = serde_json::from_str(saved).unwrap();
+        assert_eq!(bot.queue.len(), 1);
+        assert!(bot.queue[0].inflight());
+        assert_eq!(bot.current.as_ref().map(|p| p.hops), Some(1));
+        let restored = handoff::restore(bot.current, bot.queue);
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].prompt, "look");
+
+        let old = r#"{"id":1,"name":"Reviewer","preset":0,"sandbox_session":null,"msgs":[]}"#;
+        let bot: Bot = serde_json::from_str(old).unwrap();
+        assert!(bot.queue.is_empty());
+        assert!(bot.current.is_none());
     }
 }
 
