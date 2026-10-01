@@ -80,16 +80,54 @@ pub fn mentions(text: &str, bots: &[(usize, &str)], sender: usize) -> Vec<usize>
     found
 }
 
-/// Added to every bot's role so it knows who it can hand work to.
-pub fn roster(bots: &[(usize, &str, &str)], me: usize) -> String {
-    let others: Vec<String> = bots.iter().filter(|(id, ..)| *id != me).map(|(_, name, blurb)| format!("@{name} ({blurb})")).collect();
-    if others.is_empty() {
-        return String::new();
+/// Puts `name` at the front and drops duplicates past `limit`.
+pub fn remember(mut recent: Vec<String>, name: &str, limit: usize) -> Vec<String> {
+    recent.retain(|n| !n.eq_ignore_ascii_case(name));
+    recent.insert(0, name.to_string());
+    recent.truncate(limit);
+    recent
+}
+
+/// `names` is newest-first. Drops anyone no longer on the roster.
+pub fn recent<'a>(names: &'a [String], alive: &[&str], limit: usize) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = vec![];
+    for name in names {
+        let known = alive.iter().any(|a| a.eq_ignore_ascii_case(name));
+        let seen = out.iter().any(|n| n.eq_ignore_ascii_case(name));
+        if !known || seen {
+            continue;
+        }
+        out.push(name.as_str());
+        if out.len() == limit {
+            break;
+        }
     }
-    format!(
-        " Other bots you can hand work to: {}. Writing @Name anywhere in your reply sends your whole reply to that bot, so only write @Name when you want it to act next.",
-        others.join(", ")
-    )
+    out
+}
+
+/// Added to every bot's role: who the peers are, when to call them, recent deliveries, and room peers.
+/// `recent` is newest-first. `rooms` is `(title, peer names)` for rooms this bot is in.
+pub fn roster(bots: &[(usize, &str, &str)], me: usize, recent: &[&str], rooms: &[(&str, &[&str])]) -> String {
+    let others: Vec<String> = bots.iter().filter(|(id, ..)| *id != me).map(|(_, name, blurb)| format!("@{name} ({blurb})")).collect();
+    let mut parts = vec![];
+    if !others.is_empty() {
+        parts.push(format!(
+            "Other bots you can hand work to: {}. Hand off when the next step matches their specialty better than doing it yourself. Write @Name only to make that bot act next. Do not @Name to narrate, acknowledge, or think out loud.",
+            others.join(", ")
+        ));
+    }
+    if !recent.is_empty() && !others.is_empty() {
+        let names: Vec<String> = recent.iter().map(|n| format!("@{n}")).collect();
+        parts.push(format!("Recent handoffs you delivered: {}.", join_and(&names)));
+    }
+    for (title, peers) in rooms {
+        if peers.is_empty() {
+            continue;
+        }
+        let names: Vec<String> = peers.iter().map(|n| format!("@{n}")).collect();
+        parts.push(format!("In room \"{title}\" your peers are {}. Prefer them for this work.", join_and(&names)));
+    }
+    if parts.is_empty() { String::new() } else { format!("\n\n{}", parts.join("\n")) }
 }
 
 /// What the receiving bot is told.
@@ -245,5 +283,33 @@ mod tests {
         let both = share(&[(proj, "/work/proj"), (Path::new("/elsewhere/sub"), "/work/sub")], &[(proj, "/work/proj"), (Path::new("/elsewhere"), "/work/elsewhere")]);
         assert!(both.contains("You share /work/proj"));
         assert!(both.contains("Your /work/sub is inside their /work/elsewhere"));
+    }
+
+    #[test]
+    fn roster_says_when_to_call_whom() {
+        let bots = [(0, "Reviewer", "Reads diffs, finds bugs, weighs risk"), (1, "Implementer", "Writes and changes code"), (2, "Designer", "UI and UX critique and polish")];
+        let text = roster(&bots, 0, &["Implementer", "Designer"], &[("Daily standup", &["Implementer", "Designer"])]);
+        assert!(text.contains("@Implementer (Writes and changes code)"));
+        assert!(text.contains("@Designer (UI and UX critique and polish)"));
+        assert!(!text.contains("@Reviewer"));
+        assert!(text.contains("matches their specialty"));
+        assert!(text.contains("Do not @Name to narrate"));
+        assert!(text.contains("Recent handoffs you delivered: @Implementer and @Designer."));
+        assert!(text.contains("In room \"Daily standup\" your peers are @Implementer and @Designer."));
+        assert!(roster(&bots, 0, &[], &[]).contains("Hand off when"));
+        assert_eq!(roster(&[(0, "Reviewer", "Reads diffs")], 0, &["Implementer"], &[]), "");
+    }
+
+    #[test]
+    fn recent_handoffs_are_newest_unique_and_still_alive() {
+        let mut names = vec![];
+        names = remember(names, "Implementer", 4);
+        names = remember(names, "Designer", 4);
+        names = remember(names, "Implementer", 4);
+        names = remember(names, "Ghost", 4);
+        assert_eq!(names, vec!["Ghost".to_string(), "Implementer".into(), "Designer".into()]);
+        assert_eq!(recent(&names, &["Implementer", "Designer"], 4), vec!["Implementer", "Designer"]);
+        assert_eq!(recent(&names, &["Designer"], 4), vec!["Designer"]);
+        assert_eq!(recent(&names, &["Implementer", "Designer"], 1), vec!["Implementer"]);
     }
 }

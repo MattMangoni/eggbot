@@ -12,7 +12,7 @@ Built in Rust with [GPUI](https://www.gpui.rs).
 - **One container per bot.** Bots get full power inside their own machine, and only the folders you mount.
 - **Handoffs.** A bot that writes `@Name` hands its reply to that bot. Chains pause after 3 hops.
 - **Schedules.** Daily, weekdays, or every N hours or minutes. A run with nothing to report stays quiet.
-- **Memory.** Each bot keeps short notes that survive fresh sessions.
+- **Memory.** Each bot keeps short notes (facts, preferences, lessons) that survive a restart and a fresh session, and reads them on later turns.
 - **Proactive messages.** Notifications when a bot finishes, needs you, or a chain pauses, plus an unread dot.
 - **Menu bar egg.** Close the window and the bots keep working. Start at login is optional.
 

@@ -123,7 +123,7 @@ pub fn prompt(title: &str, kickoff: &str, peers: &[Peer<'_>]) -> String {
     } else {
         let list = peers.iter().map(|p| format!("@{} ({})", p.name, p.blurb)).collect::<Vec<_>>().join(", ");
         format!(
-            "The other bots in this room are your peers: {list}. Writing @Name anywhere in your reply sends your whole reply to that bot, so only write @Name when you want them to act. You are not their lead; you only start this round."
+            "The other bots in this room are your peers: {list}. Writing @Name anywhere in your reply sends your whole reply to that bot. Call a peer when the next step matches their specialty better than doing it yourself; do not @Name just to keep them posted. You are not their lead; you only start this round."
         )
     };
     format!("Room \"{}\". You are the facilitator for this kickoff.\n{roster}\n\n{}", title.trim(), kickoff.trim())
@@ -175,6 +175,7 @@ mod tests {
         assert!(text.contains("Room \"Daily standup\""));
         assert!(text.contains("@Implementer (Writes code)"));
         assert!(text.contains("@Designer (UI critique)"));
+        assert!(text.contains("matches their specialty"));
         assert!(text.contains("You are not their lead"));
         assert!(text.ends_with("What shipped?"));
         assert!(!text.contains("@Facilitator"));
