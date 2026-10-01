@@ -22,7 +22,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup, Find]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -381,6 +381,9 @@ struct Saved {
     meters: Vec<Meter>,
     #[serde(default = "default_sidebar")]
     sidebar_w: f32,
+    // missing in older state.json stays open; bool's Default is false
+    #[serde(default = "default_sidebar_open")]
+    sidebar_open: bool,
     #[serde(default)]
     appearance: Appearance,
     /// Instructions for all bots; None = `SHARED`.
@@ -390,6 +393,10 @@ struct Saved {
 
 fn default_sidebar() -> f32 {
     260.
+}
+
+fn default_sidebar_open() -> bool {
+    true
 }
 
 struct Eggbot {
@@ -426,6 +433,8 @@ struct Eggbot {
     /// Dropdown options need refilling (bot, provider or Codex model list changed); done in render.
     selects_stale: bool,
     sidebar_w: f32,
+    /// Bot list visible. The width is kept while it is closed.
+    sidebar_open: bool,
     appearance: Appearance,
     /// The window is in front; otherwise news goes out as notifications.
     active: bool,
@@ -553,11 +562,11 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
-                (this.bots, this.next_id, this.meters, this.sidebar_w, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.shared);
+                (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared);
             }
             _ => {
                 for i in 0..3 {
@@ -671,14 +680,23 @@ impl Eggbot {
             NSApplication::sharedApplication(mtm).setAppearance(look.as_deref());
         }
         self.p = Palette::apply(window, cx);
-        set_menus(appearance, cx);
+        set_menus(appearance, self.sidebar_open, cx);
+        self.save();
+        cx.notify();
+    }
+
+    /// ⌘B hides or shows the bot list. The width stays, and the choice is saved.
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_open = !self.sidebar_open;
+        self.resizing = false;
+        set_menus(self.appearance, self.sidebar_open, cx);
         self.save();
         cx.notify();
     }
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "appearance": self.appearance, "shared": self.shared });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -1430,13 +1448,21 @@ fn add_vibrancy(window: &Window) {
     parent.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(view));
 }
 
-fn set_menus(appearance: Appearance, cx: &mut App) {
+fn set_menus(appearance: Appearance, sidebar_open: bool, cx: &mut App) {
     let pick = |name: &str, a: Appearance| MenuItem::Action { name: name.to_string().into(), action: Box::new(a), os_action: None, checked: a == appearance, disabled: false };
     cx.set_menus([
         Menu { name: "eggbot".into(), items: vec![MenuItem::action("Settings…", OpenSettings), MenuItem::action("Setup…", OpenSetup), MenuItem::separator(), MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
         Menu {
             name: "View".into(),
-            items: vec![pick("Match System", Appearance::System), pick("Light", Appearance::Light), pick("Dark", Appearance::Dark), MenuItem::separator(), MenuItem::action("Next Appearance", CycleAppearance)],
+            items: vec![
+                MenuItem::Action { name: "Toggle Sidebar".to_string().into(), action: Box::new(ToggleSidebar), os_action: None, checked: sidebar_open, disabled: false },
+                MenuItem::separator(),
+                pick("Match System", Appearance::System),
+                pick("Light", Appearance::Light),
+                pick("Dark", Appearance::Dark),
+                MenuItem::separator(),
+                MenuItem::action("Next Appearance", CycleAppearance),
+            ],
             disabled: false,
         },
     ]);
@@ -1464,6 +1490,7 @@ fn main() {
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("cmd-n", NewBot, None),
+            KeyBinding::new("cmd-b", ToggleSidebar, None),
             KeyBinding::new("cmd-k", FocusInput, None),
             // ⌘[ / ⌘] are outdent/indent inside text fields, so switching uses ⌃Tab
             KeyBinding::new("ctrl-shift-tab", PrevBot, None),
@@ -1497,4 +1524,23 @@ fn main() {
             cx.activate(true);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Saved;
+
+    #[test]
+    fn sidebar_stays_open_when_state_has_no_flag() {
+        let saved: Saved = serde_json::from_str(r#"{"next_id":0,"bots":[]}"#).unwrap();
+        assert!(saved.sidebar_open);
+        assert_eq!(saved.sidebar_w, 260.);
+    }
+
+    #[test]
+    fn sidebar_closed_round_trips() {
+        let saved: Saved = serde_json::from_str(r#"{"next_id":1,"bots":[],"sidebar_open":false,"sidebar_w":300.0}"#).unwrap();
+        assert!(!saved.sidebar_open);
+        assert_eq!(saved.sidebar_w, 300.);
+    }
 }

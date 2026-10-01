@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -23,6 +23,8 @@ const DROP_LINE: u32 = 0x0A84FF;
 const READ_W: f32 = 720.;
 const SIDEBAR_MIN: f32 = 200.;
 const SIDEBAR_MAX: f32 = 420.;
+/// Room for the traffic lights. The chat top bar uses it when the sidebar is closed.
+const TRAFFIC_INSET: f32 = 84.;
 
 /// A small outlined button (top bar, panels, notices).
 fn button(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
@@ -258,7 +260,7 @@ impl Eggbot {
                     .flex_none()
                     .flex()
                     .items_center()
-                    .pl(px(84.))
+                    .pl(px(TRAFFIC_INSET))
                     .pr_2()
                     .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("eggbot"))
                     .child(
@@ -381,6 +383,8 @@ impl Eggbot {
             .items_center()
             .gap_1()
             .px_3()
+            // traffic lights sit on this row when the sidebar is closed
+            .when(!self.sidebar_open, |d| d.pl(px(TRAFFIC_INSET)))
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -1078,7 +1082,7 @@ impl Render for Eggbot {
             .text_color(self.p.ink)
             .when(self.resizing, |d| d.cursor_col_resize())
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                if this.resizing {
+                if this.resizing && this.sidebar_open {
                     this.sidebar_w = e.position.x.as_f32().clamp(SIDEBAR_MIN, SIDEBAR_MAX);
                     cx.notify();
                 }
@@ -1119,6 +1123,7 @@ impl Render for Eggbot {
             .on_action(cx.listener(|this, _: &OpenSetup, _, cx| this.open_setup(cx)))
             .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &StopTurn, window, cx| {
                 if this.menu_open {
                     this.menu_open = false;
@@ -1133,7 +1138,7 @@ impl Render for Eggbot {
                 cx.hide();
                 set_dock_icon(false);
             }))
-            .child(self.sidebar(cx))
+            .when(self.sidebar_open, |d| d.child(self.sidebar(cx)))
             .child(self.chat(cx))
     }
 }
