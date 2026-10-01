@@ -38,7 +38,7 @@ fn docker(args: &[&str]) -> Result<String, String> {
 }
 
 /// Starts the engine behind the active Docker context, then waits until it answers.
-fn wake() -> Result<(), String> {
+pub fn wake() -> Result<(), String> {
     let context = docker(&["context", "show"]).unwrap_or_default();
     let app = |name: &str| ["/Applications", &format!("{}/Applications", std::env::var("HOME").unwrap_or_default())].iter().any(|d| Path::new(&format!("{d}/{name}.app")).exists());
     let open = |name: &str| run(Command::new("open").args(["-ga", name]));
@@ -117,11 +117,37 @@ fn remove_old_images(current: &str) {
     }
 }
 
+/// Runs `cmd` in a new Terminal window, where the user can watch and answer it.
+fn terminal(cmd: &str) -> Result<(), String> {
+    run(Command::new("osascript").args(["-e", "tell application \"Terminal\" to activate", "-e", &format!("tell application \"Terminal\" to do script \"{cmd}\"")])).map(|_| ())
+}
+
 /// Opens Terminal with the provider's own login flow in a throwaway container; eggbot never sees the token.
 pub fn sign_in(codex: bool) -> Result<(), String> {
     let login = if codex { "codex login --device-auth" } else { "claude" };
-    let cmd = format!("docker run -it --rm -v {CLAUDE_VOLUME} -v {CODEX_VOLUME} {} {login}", image());
-    run(Command::new("osascript").args(["-e", "tell application \"Terminal\" to activate", "-e", &format!("tell application \"Terminal\" to do script \"{cmd}\"")])).map(|_| ())
+    terminal(&format!("docker run -it --rm -v {CLAUDE_VOLUME} -v {CODEX_VOLUME} {} {login}", image()))
+}
+
+/// Setup checks; each is a quick `docker` call.
+pub fn installed() -> bool {
+    docker(&["--version"]).is_ok()
+}
+
+pub fn running() -> bool {
+    docker(&["info"]).is_ok()
+}
+
+pub fn image_ready() -> bool {
+    docker(&["image", "inspect", &image()]).is_ok()
+}
+
+/// Installs Colima (free, open source) with the Docker CLI in Terminal, or opens its page without Homebrew.
+pub fn install_engine() -> Result<(), String> {
+    if run(Command::new("brew").arg("--version")).is_ok() {
+        terminal("brew install colima docker && colima start --cpu 4 --memory 8")
+    } else {
+        run(Command::new("open").arg("https://github.com/abiosoft/colima#installation")).map(|_| ())
+    }
 }
 
 /// True once the shared Claude volume holds a working login (`claude auth status` exits 0).

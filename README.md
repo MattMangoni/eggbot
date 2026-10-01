@@ -31,7 +31,7 @@ open ~/Applications/eggbot.app
 
 `cargo run` also works for development, but notifications and start at login need the app bundle.
 
-The first turn builds the bot image (about a minute). Sign in when a bot asks: eggbot opens Terminal with the provider's own login flow.
+On first launch a setup checklist walks you through it: install a Docker engine (Colima by default, through Homebrew in Terminal), start it, build the bot image (about a minute), and sign in to Claude and/or Codex with each provider's own login flow in Terminal. Reopen it any time with eggbot → Setup….
 
 ## How your login is handled
 

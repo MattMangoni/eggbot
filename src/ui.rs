@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Eggbot, OpenSettings, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -427,6 +427,9 @@ impl Eggbot {
     fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().bg(p.bg);
+        if let Some(setup) = &self.setup {
+            return main.child(div().h(px(44.)).flex_none()).child(self.setup_view(setup, cx)).into_any_element();
+        }
         let Some(bot) = self.bots.get(self.selected) else {
             return main
                 .child(div().h(px(44.)).flex_none())
@@ -588,6 +591,85 @@ impl Eggbot {
                     )
                     .child(div().flex_1())
                     .children(note),
+            )
+    }
+
+    /// The first-run checklist: each row turns green on its own as the checks pass.
+    fn setup_view(&self, s: &Setup, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        type Act = Box<dyn Fn(&mut Eggbot, &mut Context<Eggbot>)>;
+        let row = |key: &'static str, title: &'static str, check: &Check, ok: &'static str, todo: &'static str, action: Option<(&'static str, Act)>| {
+            let (icon, line) = match check {
+                Check::Ok => (Icon::new(IconName::CircleCheck).size_4().text_color(p.ok).into_any_element(), ok.to_string()),
+                Check::Unknown => (Spinner::new().color(p.muted).xsmall().into_any_element(), "Checking…".to_string()),
+                Check::Busy(label) => (Spinner::new().color(p.muted).xsmall().into_any_element(), label.to_string()),
+                Check::Failed(e) => (Icon::new(IconName::CircleAlert).size_4().text_color(p.err).into_any_element(), e.clone()),
+                Check::Missing => (Icon::new(IconName::CircleDashed).size_4().text_color(p.muted).into_any_element(), todo.to_string()),
+            };
+            let failed = matches!(check, Check::Failed(_));
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .py_2()
+                .child(div().w(px(18.)).flex_none().flex().justify_center().child(icon))
+                .child(div().flex().flex_col().flex_1().min_w_0().child(div().text_sm().text_color(p.ink).child(title)).child(div().text_xs().text_color(if failed { p.err } else { p.muted }).child(line)))
+                .when_some(action.filter(|_| !matches!(check, Check::Ok | Check::Unknown)), |d, (label, act)| {
+                    d.child(button(key, p).flex_none().on_click(cx.listener(move |this, _, _, cx| act(this, cx))).child(if matches!(check, Check::Busy(_)) { "Again" } else { label }))
+                })
+        };
+        let ready = |c: &Check| *c == Check::Ok;
+        let sign_in = |codex: bool| -> Act {
+            Box::new(move |this: &mut Eggbot, cx: &mut Context<Eggbot>| {
+                if let Some(s) = &mut this.setup {
+                    *(if codex { &mut s.codex } else { &mut s.claude }) = Check::Busy("Finish signing in in Terminal…");
+                }
+                this.sign_in(codex, cx);
+            })
+        };
+        let rows = div()
+            .flex()
+            .flex_col()
+            .child(row("setup-engine", "Docker engine", &s.engine, "Docker is installed.", "Each bot runs in its own container. Colima is free and open source.", Some(("Install Colima", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.engine, "Installing in Terminal…", sandbox::install_engine, cx))))))
+            .child(row("setup-running", "Docker running", &s.running, "Docker is running.", "Start your Docker engine.", ready(&s.engine).then(|| ("Start Docker", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.running, "Starting Docker…", sandbox::wake, cx)) as Act))))
+            .child(row("setup-image", "Bot machine", &s.image, "The bot machine is ready.", "The image every bot runs in. Built once, in about a minute.", ready(&s.running).then(|| ("Build", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.image, "Building, about a minute…", || sandbox::ready(&|_| {}), cx)) as Act))))
+            .child(div().h(px(1.)).my_1().bg(p.line))
+            .child(row("setup-claude", "Claude", &s.claude, "Signed in to Claude.", "Sign in with your Claude plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(false)))))
+            .child(row("setup-codex", "Codex", &s.codex, "Signed in to Codex.", "Sign in with your ChatGPT plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(true)))));
+        let done = s.done();
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .px_6()
+            .pb(px(60.))
+            .child(egg("setup", hex(0xE3D2B9), 28., Mood::Still))
+            .child(div().mt_4().text_2xl().text_color(p.ink).child("Set up eggbot"))
+            .child(div().mt_1().mb_6().text_sm().text_color(p.muted).child("Each bot works in its own container, on your own Claude or ChatGPT plan."))
+            .child(self.panel().max_w(px(520.)).mt_0().child(rows))
+            .child(
+                div()
+                    .mt_6()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .child(link("setup-skip", p).child("Skip for now").on_click(cx.listener(|this, _, _, cx| {
+                        this.setup = None;
+                        cx.notify();
+                    })))
+                    .child(
+                        primary("setup-done", p)
+                            .when(!done, |d| d.opacity(0.4))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if done {
+                                    this.setup = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .child("Start using eggbot"),
+                    ),
             )
     }
 
@@ -902,6 +984,7 @@ impl Eggbot {
                 .text_color(p.err)
                 .child(Icon::new(IconName::CircleAlert).size_4())
                 .child(t.clone())
+                .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
                 .when(t.contains("/login") || t.contains("codex login"), |d| {
                     let codex = t.contains("codex login");
                     d.child(button(("sign-in", i), p).ml_2().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
@@ -991,6 +1074,7 @@ impl Render for Eggbot {
             }))
             .on_action(cx.listener(|this, a: &Appearance, window, cx| this.set_appearance(*a, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenSetup, _, cx| this.open_setup(cx)))
             .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
             .on_action(cx.listener(|this, _: &StopTurn, _, cx| {
                 if this.menu_open {

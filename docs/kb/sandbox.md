@@ -41,3 +41,7 @@ Containers run in UTC. Each `docker exec` gets `-e TZ=<zone>` from the Mac's `/e
 ## Starting Docker
 
 eggbot needs only the `docker` CLI (no compose). When `docker info` fails, `sandbox::wake` starts the engine behind `docker context show`: `orbstack` → `open -ga OrbStack`, `desktop-linux` → `open -ga Docker`, `colima[-profile]` → `colima start <profile>`. `colima stop` resets the context to `default`, so for `default` it tries an installed engine: Colima, then OrbStack, then Docker Desktop. Then it waits up to 90 s for `docker info`. Tested with Colima stopped; OrbStack and Docker Desktop paths not tested here.
+
+## First-run setup (`Eggbot::open_setup`, `ui::setup_view`)
+
+Shown on first launch (no `state.json`) and from eggbot → Setup…; a bot error that mentions Docker links to it. Rows: Docker engine (`docker --version`), Docker running (`docker info`), bot image (`docker image inspect`), Claude (`claude auth status` in a throwaway container), Codex (`codex::account`). A loop re-checks every 4 s while it is open, because installs and sign-ins finish in Terminal; sign-in checks stop once they pass. Actions: Install Colima (`brew install colima docker && colima start --cpu 4 --memory 8` in Terminal, or the Colima page without Homebrew), Start Docker (`sandbox::wake`), Build (`sandbox::ready`), Sign in (the usual Terminal flow). "Start using eggbot" needs Docker, the image and at least one sign-in; "Skip for now" closes it.

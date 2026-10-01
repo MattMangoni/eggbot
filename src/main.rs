@@ -22,7 +22,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -50,7 +50,7 @@ impl Appearance {
 }
 
 // the default bundle has only the component icons; add the extra ones we use
-gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil, CircleCheck, CircleDashed]);
 
 struct AppAssets;
 
@@ -183,6 +183,34 @@ const PRESETS: [Preset; 4] = [
     },
     Preset { name: "Custom", blurb: "A blank bot you shape yourself", color: 0xF3DF9C, role: "You are a helpful bot living in eggbot." },
 ];
+/// One row of the setup checklist.
+#[derive(Clone, PartialEq)]
+enum Check {
+    Unknown,
+    Ok,
+    Missing,
+    /// An action is running (install, start, build, sign-in); the label says what.
+    Busy(&'static str),
+    Failed(String),
+}
+
+/// The first-run checklist: Docker engine, Docker running, bot image, Claude and Codex sign-in.
+#[derive(Clone)]
+struct Setup {
+    engine: Check,
+    running: Check,
+    image: Check,
+    claude: Check,
+    codex: Check,
+}
+
+impl Setup {
+    /// Docker works, the image exists, and at least one provider is signed in.
+    fn done(&self) -> bool {
+        [&self.engine, &self.running, &self.image].iter().all(|c| **c == Check::Ok) && (self.claude == Check::Ok || self.codex == Check::Ok)
+    }
+}
+
 /// "Instructions for all bots" until the user edits them in Settings.
 const SHARED: &str = "Reply in concise GitHub-flavored markdown.";
 const NOTES: &str = " You keep your own notes in /memory/NOTES.md. When a session starts, read it if it exists. Keep it short and current: durable facts about the user, the project, decisions and open work, never chat logs.";
@@ -391,6 +419,8 @@ struct Eggbot {
     appearance: Appearance,
     /// The window is in front; otherwise news goes out as notifications.
     active: bool,
+    /// The first-run checklist, shown in place of the chat while open.
+    setup: Option<Setup>,
     /// The sidebar row being dragged, to hide drop lines that would change nothing.
     dragging: Option<usize>,
     /// Dragging the sidebar's edge.
@@ -499,7 +529,8 @@ impl Eggbot {
         let p = Palette::apply(window, cx);
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let first_launch = saved.is_none();
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
@@ -514,6 +545,9 @@ impl Eggbot {
         }
         // after loading: it saves state
         this.set_appearance(appearance, window, cx);
+        if first_launch {
+            this.open_setup(cx);
+        }
         if this.bots.iter().any(|b| b.provider == Provider::Codex) {
             this.refresh_codex(1, cx);
         }
@@ -1231,6 +1265,65 @@ impl Eggbot {
         .detach();
     }
 
+    fn open_setup(&mut self, cx: &mut Context<Self>) {
+        if self.setup.is_some() {
+            return;
+        }
+        let unknown = Check::Unknown;
+        self.setup = Some(Setup { engine: unknown.clone(), running: unknown.clone(), image: unknown.clone(), claude: unknown.clone(), codex: unknown });
+        (self.settings_open, self.edit_open, self.sched_open) = (false, false, false);
+        cx.notify();
+        // re-check every few seconds while the checklist is open; installs and sign-ins finish outside eggbot
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(Some(before)) = this.update(cx, |this, _| this.setup.clone()) else { return };
+                let after = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let ok = |c: &Check, now: bool| match (c, now) {
+                            (_, true) => Check::Ok,
+                            (Check::Busy(_) | Check::Failed(_), false) => c.clone(),
+                            _ => Check::Missing,
+                        };
+                        let engine = ok(&before.engine, sandbox::installed());
+                        let running = ok(&before.running, engine == Check::Ok && sandbox::running());
+                        let image = ok(&before.image, running == Check::Ok && sandbox::image_ready());
+                        // sign-in checks start a container, so they stop once they pass
+                        let signed = |c: &Check, check: &dyn Fn() -> bool| if *c == Check::Ok { Check::Ok } else { ok(c, image == Check::Ok && check()) };
+                        let claude = signed(&before.claude, &sandbox::claude_signed_in);
+                        let codex = signed(&before.codex, &|| codex::account().is_ok());
+                        Setup { engine, running, image, claude, codex }
+                    })
+                    .await;
+                if this.update(cx, |this, cx| if this.setup.is_some() { this.setup = Some(after); cx.notify() }).is_err() {
+                    return;
+                }
+                cx.background_executor().timer(Duration::from_secs(4)).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Runs a setup action off the main thread; its row shows `label` until the next check, or the error.
+    fn setup_action(&mut self, row: fn(&mut Setup) -> &mut Check, label: &'static str, action: fn() -> Result<(), String>, cx: &mut Context<Self>) {
+        let Some(setup) = &mut self.setup else { return };
+        *row(setup) = Check::Busy(label);
+        cx.notify();
+        let task = cx.background_executor().spawn(async move { action() });
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = task.await {
+                this.update(cx, |this, cx| {
+                    if let Some(setup) = &mut this.setup {
+                        *row(setup) = Check::Failed(e);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn sign_in(&mut self, codex: bool, cx: &mut Context<Self>) {
         self.watch_sign_in(if codex { Provider::Codex } else { Provider::Claude }, cx);
         let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
@@ -1270,7 +1363,7 @@ fn add_vibrancy(window: &Window) {
 fn set_menus(appearance: Appearance, cx: &mut App) {
     let pick = |name: &str, a: Appearance| MenuItem::Action { name: name.to_string().into(), action: Box::new(a), os_action: None, checked: a == appearance, disabled: false };
     cx.set_menus([
-        Menu { name: "eggbot".into(), items: vec![MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
+        Menu { name: "eggbot".into(), items: vec![MenuItem::action("Settings…", OpenSettings), MenuItem::action("Setup…", OpenSetup), MenuItem::separator(), MenuItem::action("Close Window", CloseWindow), MenuItem::action("Quit eggbot", Quit)], disabled: false },
         Menu {
             name: "View".into(),
             items: vec![pick("Match System", Appearance::System), pick("Light", Appearance::Light), pick("Dark", Appearance::Dark), MenuItem::separator(), MenuItem::action("Next Appearance", CycleAppearance)],
