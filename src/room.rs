@@ -1,5 +1,6 @@
 //! A room is a title, a kickoff, and existing bots. Start talks to one facilitator;
 //! the others stay peers and join when that bot writes `@Name`.
+//! The transcript is the same conversation, in order, kept on the room.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,11 +19,79 @@ pub struct Room {
     /// The kickoff has been delivered at least once.
     #[serde(default)]
     pub started: bool,
+    /// Kickoff, replies, and in-room handoffs, in the order they happened.
+    #[serde(default)]
+    pub transcript: Vec<Event>,
+}
+
+/// One line of a room's transcript. Names are copied at the time, so a rename does not rewrite history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Event {
+    Kickoff { to: usize, name: String, text: String },
+    Reply { bot: usize, name: String, color: u32, text: String },
+    /// `@Name` whose target is still a member of this room.
+    Handoff { from: usize, from_name: String, color: u32, to: usize, to_name: String, paused: bool },
+    /// The room turn failed or was stopped.
+    Trouble { bot: usize, name: String, text: String },
 }
 
 impl Room {
     pub fn new(id: usize, title: String) -> Self {
-        Self { id, title, kickoff: String::new(), members: vec![], facilitator: None, unread: false, started: false }
+        Self {
+            id,
+            title,
+            kickoff: String::new(),
+            members: vec![],
+            facilitator: None,
+            unread: false,
+            started: false,
+            transcript: vec![],
+        }
+    }
+
+    pub fn record_kickoff(&mut self, to: usize, name: &str, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.transcript.push(Event::Kickoff { to, name: name.to_string(), text: text.to_string() });
+    }
+
+    /// False when there is nothing to show (a blank reply is not a line).
+    pub fn record_reply(&mut self, bot: usize, name: &str, color: u32, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        self.transcript.push(Event::Reply { bot, name: name.to_string(), color, text: text.to_string() });
+        true
+    }
+
+    pub fn record_handoff(&mut self, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
+        self.transcript.push(Event::Handoff {
+            from,
+            from_name: from_name.to_string(),
+            color,
+            to,
+            to_name: to_name.to_string(),
+            paused,
+        });
+    }
+
+    pub fn record_trouble(&mut self, bot: usize, name: &str, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        self.transcript.push(Event::Trouble { bot, name: name.to_string(), text: text.to_string() });
+        true
+    }
+
+    /// The user continued the chain, so the latest paused handoff to `to` is no longer waiting.
+    pub fn resume(&mut self, to: usize) {
+        if let Some(Event::Handoff { paused, .. }) = self.transcript.iter_mut().rev().find(|e| matches!(e, Event::Handoff { to: id, paused: true, .. } if *id == to)) {
+            *paused = false;
+        }
     }
 }
 
@@ -90,6 +159,11 @@ pub fn forget(mut members: Vec<usize>, facilitator: Option<usize>, gone: usize) 
     (members, facilitator)
 }
 
+/// Room id to keep on the next hop. A turn that is not in a room, or a target outside the roster, leaves.
+pub fn carry(room: Option<usize>, members: &[usize], target: usize) -> Option<usize> {
+    room.filter(|_| members.contains(&target))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,7 +217,43 @@ mod tests {
         let room: Room = serde_json::from_str(r#"{"id":1,"title":"Standup","kickoff":"What shipped?","members":[1,2]}"#).unwrap();
         assert_eq!(room.facilitator, None);
         assert!(!room.unread && !room.started);
+        assert!(room.transcript.is_empty());
         let saved = serde_json::to_string(&room).unwrap();
         assert_eq!(serde_json::from_str::<Room>(&saved).unwrap(), room);
+    }
+
+    #[test]
+    fn transcript_is_kickoff_then_replies_then_in_room_handoffs() {
+        let mut room = Room::new(3, "Standup".into());
+        room.members = vec![1, 2];
+        room.record_kickoff(1, "Reviewer", "  What shipped?  ");
+        assert!(room.record_reply(1, "Reviewer", 0x111, "  @Implementer please look.  "));
+        // a peer stays on this transcript; a bot outside the roster does not
+        assert_eq!(carry(Some(room.id), &room.members, 2), Some(3));
+        assert_eq!(carry(Some(room.id), &room.members, 9), None);
+        assert_eq!(carry(None, &room.members, 2), None);
+        room.record_handoff(1, "Reviewer", 0x111, 2, "Implementer", false);
+        assert!(room.record_reply(2, "Implementer", 0x222, "On it."));
+        room.record_handoff(2, "Implementer", 0x222, 1, "Reviewer", true);
+        room.resume(1);
+        assert!(!room.record_reply(2, "Implementer", 0x222, "   "));
+        assert!(!room.record_trouble(1, "Reviewer", "  "));
+        assert!(room.record_trouble(1, "Reviewer", "Stopped."));
+        assert!(matches!(room.transcript[0], Event::Kickoff { to: 1, ref text, .. } if text == "What shipped?"));
+        assert!(matches!(room.transcript[1], Event::Reply { bot: 1, ref text, .. } if text == "@Implementer please look."));
+        assert!(matches!(room.transcript[2], Event::Handoff { to: 2, paused: false, .. }));
+        assert!(matches!(room.transcript[3], Event::Reply { bot: 2, .. }));
+        assert!(matches!(room.transcript[4], Event::Handoff { to: 1, paused: false, .. }));
+        assert!(matches!(room.transcript[5], Event::Trouble { bot: 1, ref text, .. } if text == "Stopped."));
+        assert_eq!(room.transcript.len(), 6);
+        let loaded: Room = serde_json::from_str(&serde_json::to_string(&room).unwrap()).unwrap();
+        assert_eq!(loaded.transcript, room.transcript);
+    }
+
+    #[test]
+    fn a_blank_kickoff_adds_no_line() {
+        let mut room = Room::new(1, "Standup".into());
+        room.record_kickoff(1, "Reviewer", "   ");
+        assert!(room.transcript.is_empty());
     }
 }

@@ -18,19 +18,22 @@ pub struct Pending {
     /// `@Name` handoff, including Continue chain (hops reset to 0).
     #[serde(default)]
     pub handoff: bool,
+    /// Room this hop belongs to. Kept on the queue so a quit resumes the same transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<usize>,
 }
 
 impl Pending {
     pub fn user(prompt: String) -> Self {
-        Self { prompt, hops: 0, fresh: false, handoff: false }
+        Self { prompt, hops: 0, fresh: false, handoff: false, room: None }
     }
 
     pub fn handoff(prompt: String, hops: u32) -> Self {
-        Self { prompt, hops, fresh: false, handoff: true }
+        Self { prompt, hops, fresh: false, handoff: true, room: None }
     }
 
     pub fn schedule(prompt: String) -> Self {
-        Self { prompt, hops: 0, fresh: true, handoff: false }
+        Self { prompt, hops: 0, fresh: true, handoff: false, room: None }
     }
 
     /// This hop must be restarted after a quit or crash. User turns and schedules stay stopped.
@@ -203,6 +206,13 @@ mod tests {
         let old = r#"{"prompt":"ship it","hops":2}"#;
         let loaded = serde_json::from_str::<Pending>(old).unwrap();
         assert!(!loaded.fresh && !loaded.handoff);
+        assert!(loaded.room.is_none());
+        let mut room_turn = Pending::handoff("go".into(), 0);
+        room_turn.room = Some(3);
+        let kept = serde_json::from_str::<Pending>(&serde_json::to_string(&room_turn).unwrap()).unwrap();
+        assert_eq!(kept.room, Some(3));
+        assert!(kept.inflight());
+        assert_eq!(restore(Some(room_turn), vec![])[0].room, Some(3));
     }
 
     #[test]
