@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -411,6 +411,7 @@ impl Eggbot {
             )
             .when_some(folder, |d, f| d.child(div().text_sm().text_color(p.muted).child("/")).child(div().px_2().text_sm().text_color(p.muted).child(f)))
             .child(div().flex_1())
+            .child(div().mr_2().child(self.find_bar(cx)))
             .when(bot.context.1 > 0, |d| {
                 let used = bot.context.0 as f32 / bot.context.1 as f32;
                 d.child(div().mr_2().flex().items_center().gap_2().text_xs().text_color(p.muted).child("Context").child(bar(used, 40., p)).child(format!("{:.0}%", used.clamp(0., 1.) * 100.)))
@@ -594,6 +595,38 @@ impl Eggbot {
             )
     }
 
+    /// The search field in the top bar (⌘F), or the icon that opens it.
+    fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.p;
+        let icon_button = |id: &'static str, icon: IconName| div().id(id).p_1().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(icon).size_3p5());
+        if !self.find_open {
+            return icon_button("find", IconName::Search).on_click(cx.listener(|this, _, window, cx| this.open_find(window, cx))).into_any_element();
+        }
+        let typed = !self.find_input.read(cx).value().trim().is_empty();
+        let count = match (typed, self.find_hits.len()) {
+            (false, _) => String::new(),
+            (true, 0) => "No matches".into(),
+            (true, n) => format!("{} of {n}", self.find_at + 1),
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .h(px(28.))
+            .pl_2()
+            .pr_1()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(p.line)
+            .child(Icon::new(IconName::Search).size_3p5().text_color(p.muted))
+            .child(div().w(px(170.)).child(Input::new(&self.find_input).appearance(false).xsmall()))
+            .child(div().text_xs().text_color(p.muted).whitespace_nowrap().child(count))
+            .child(icon_button("find-older", IconName::ChevronUp).on_click(cx.listener(|this, _, _, cx| this.find_step(-1, cx))))
+            .child(icon_button("find-newer", IconName::ChevronDown).on_click(cx.listener(|this, _, _, cx| this.find_step(1, cx))))
+            .child(icon_button("find-close", IconName::Close).on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))
+            .into_any_element()
+    }
+
     /// The first-run checklist: each row turns green on its own as the checks pass.
     fn setup_view(&self, s: &Setup, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
@@ -681,8 +714,17 @@ impl Eggbot {
             None if bot.waiting() => self.typing(bot).into_any_element(),
             None => div().into_any_element(),
         };
-        let last = ix == bot.msgs.len();
-        div().w_full().flex().justify_center().px_6().pt(px(if ix == 0 { 24. } else { 16. })).when(last, |d| d.pb_6()).child(div().w_full().max_w(px(READ_W)).child(el)).into_any_element()
+        let (last, hit) = (ix == bot.msgs.len(), self.find_current() == Some(ix));
+        // the 8px inset leaves room for the search highlight without moving the text
+        div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .px_4()
+            .pt(px(if ix == 0 { 20. } else { 8. }))
+            .when(last, |d| d.pb(px(20.)))
+            .child(div().w_full().max_w(px(READ_W + 16.)).px_2().py_1().rounded(px(10.)).when(hit, |d| d.bg(self.p.tint)).child(el))
+            .into_any_element()
     }
 
     fn panel(&self) -> Div {
@@ -1076,10 +1118,13 @@ impl Render for Eggbot {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSetup, _, cx| this.open_setup(cx)))
             .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
-            .on_action(cx.listener(|this, _: &StopTurn, _, cx| {
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &StopTurn, window, cx| {
                 if this.menu_open {
                     this.menu_open = false;
                     cx.notify();
+                } else if this.find_open {
+                    this.close_find(window, cx);
                 } else {
                     this.stop(cx);
                 }

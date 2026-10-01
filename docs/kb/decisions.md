@@ -63,6 +63,7 @@ Made by Matteo on 2026-09-30 unless noted. Newest last.
 | Long chats | GPUI virtual `list` (`ListState`, bottom-aligned, follows the tail): only rows on screen plus 800px overdraw are drawn; keep all on disk | 3,000 messages: 50–95% CPU before, ~2% after, smooth scrolling |
 | Bot order | Drag a sidebar row; a blue line shows where it lands (just above the row under the pointer, or the space below the list for the end); no line where nothing would change; order saved; selection follows its bot | Matteo asked for a clear landing indicator |
 | First-run setup | Centered checklist in place of the chat on first launch + eggbot → Setup…; suggests Colima (free, open source, cross-platform) via brew in Terminal; needs at least one sign-in | Matteo chose these options and Colima as the default |
+| Search | ⌘F (or the top-bar icon) searches the open chat: user messages, replies, handoffs, scheduled prompts (not tool output), any case; starts at the newest match, Enter = older, ⇧Enter = newer, Esc closes; the current match gets a soft highlight | Matteo chose current chat, jump between matches, messages + replies |
 
 ## Phases
 

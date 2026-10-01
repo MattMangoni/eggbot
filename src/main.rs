@@ -22,7 +22,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup, Find]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -257,6 +257,16 @@ enum Msg {
     SignedIn { provider: Provider, prompt: Option<String> },
 }
 
+impl Msg {
+    /// The text search looks in: what people and bots wrote, not tool output.
+    fn searchable(&self) -> Option<&str> {
+        match self {
+            Msg::User(t) | Msg::Bot(t) | Msg::Handoff { text: t, .. } | Msg::Scheduled { prompt: t, .. } => Some(t),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Bot {
     id: usize,
@@ -419,6 +429,11 @@ struct Eggbot {
     appearance: Appearance,
     /// The window is in front; otherwise news goes out as notifications.
     active: bool,
+    /// ⌘F search in the open chat: the query field, matching message indices (oldest first) and the current one.
+    find_open: bool,
+    find_input: Entity<InputState>,
+    find_hits: Vec<usize>,
+    find_at: usize,
     /// The first-run checklist, shown in place of the chat while open.
     setup: Option<Setup>,
     /// The sidebar row being dragged, to hide drop lines that would change nothing.
@@ -443,6 +458,14 @@ impl Eggbot {
             if let InputEvent::PressEnter { shift: false, .. } = ev {
                 this.send(window, cx);
             }
+        })
+        .detach();
+        let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search this chat"));
+        cx.subscribe_in(&find_input, window, |this, _, ev: &InputEvent, _, cx| match ev {
+            InputEvent::Change => this.find_update(cx),
+            // Enter walks back in time, ⇧Enter forward
+            InputEvent::PressEnter { shift, .. } => this.find_step(if *shift { 1 } else { -1 }, cx),
+            _ => {}
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| {
@@ -530,7 +553,7 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, confirm_delete: None, meters: vec![], codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), appearance, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None };
         this.list.set_follow_mode(FollowMode::Tail);
         match saved {
             Some(s) if !s.bots.is_empty() => {
@@ -711,6 +734,7 @@ impl Eggbot {
         self.edit_open = false;
         self.sched_open = false;
         self.settings_open = false;
+        (self.find_open, self.find_hits) = (false, vec![]);
         self.list.scroll_to_end();
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
@@ -771,6 +795,52 @@ impl Eggbot {
         self.selected = self.bots.iter().position(|b| b.id == selected).unwrap_or(0);
         self.save();
         cx.notify();
+    }
+
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = true;
+        self.find_input.update(cx, |s, cx| s.focus(window, cx));
+        self.find_update(cx);
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = false;
+        self.find_hits.clear();
+        self.input.update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Matches the query (any case) against the open chat and jumps to the newest match.
+    fn find_update(&mut self, cx: &mut Context<Self>) {
+        let query = self.find_input.read(cx).value().trim().to_lowercase();
+        self.find_hits = match self.bots.get(self.selected) {
+            Some(bot) if !query.is_empty() => bot.msgs.iter().enumerate().filter(|(_, m)| m.searchable().is_some_and(|t| t.to_lowercase().contains(&query))).map(|(i, _)| i).collect(),
+            _ => vec![],
+        };
+        self.find_at = self.find_hits.len().saturating_sub(1);
+        self.find_reveal(cx);
+    }
+
+    /// Moves to the previous (-1) or next (1) match, wrapping around.
+    fn find_step(&mut self, dir: isize, cx: &mut Context<Self>) {
+        if !self.find_hits.is_empty() {
+            self.find_at = (self.find_at as isize + dir).rem_euclid(self.find_hits.len() as isize) as usize;
+            self.find_reveal(cx);
+        }
+    }
+
+    fn find_reveal(&mut self, cx: &mut Context<Self>) {
+        if let Some(&ix) = self.find_hits.get(self.find_at) {
+            // following the tail would snap back to the end; it resumes once you scroll to the bottom
+            self.list.pause_following_tail();
+            self.list.scroll_to_reveal_item(ix);
+        }
+        cx.notify();
+    }
+
+    /// The message search is pointing at, if any.
+    fn find_current(&self) -> Option<usize> {
+        self.find_open.then(|| self.find_hits.get(self.find_at).copied()).flatten()
     }
 
     /// The selected bot has been seen.
@@ -1401,6 +1471,7 @@ fn main() {
             KeyBinding::new("escape", StopTurn, None),
             KeyBinding::new("cmd-shift-d", CycleAppearance, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-f", Find, None),
         ]);
         cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectBot(n - 1), None)));
         let options = WindowOptions {
