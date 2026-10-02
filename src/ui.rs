@@ -18,7 +18,7 @@ use gpui_kit::*;
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Panel, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -532,7 +532,6 @@ impl Eggbot {
                         if PRESETS[i].name == "Custom" {
                             this.open_editor(window, cx);
                         } else {
-                            this.edit_open = false;
                             this.input.update(cx, |s, cx| s.focus(window, cx));
                         }
                         cx.notify();
@@ -648,11 +647,11 @@ impl Eggbot {
                     .text_sm()
                     .text_color(p.ink)
                     .cursor_pointer()
-                    .when(self.edit_open, |d| d.bg(p.hover))
+                    .when(self.panel == Panel::Editor, |d| d.bg(p.hover))
                     .hover(|d| d.bg(p.hover))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if this.edit_open {
-                            this.edit_open = false;
+                        if this.panel == Panel::Editor {
+                            this.panel = Panel::None;
                             cx.notify();
                         } else {
                             this.open_editor(window, cx);
@@ -709,11 +708,13 @@ impl Eggbot {
                 .into_any_element();
         };
 
-        let panels = div()
-            .when(self.settings_open, |d| d.child(self.settings(cx)))
-            .when(self.edit_open, |d| d.child(self.editor(bot, cx)))
-            .when(self.sched_open, |d| d.child(self.schedules(bot, cx)))
-            .when(self.skills_open, |d| d.child(self.skills(bot, cx)));
+        let panels = match self.panel {
+            Panel::None => None,
+            Panel::Settings => Some(self.settings(cx).into_any_element()),
+            Panel::Editor => Some(self.editor(bot, cx).into_any_element()),
+            Panel::Schedules => Some(self.schedules(bot, cx).into_any_element()),
+            Panel::Skills => Some(self.skills(bot, cx).into_any_element()),
+        };
 
         let body = if bot.msgs.is_empty() {
             div()
@@ -743,7 +744,7 @@ impl Eggbot {
 
         // new id per bot, so switching bots replays the fade
         main.child(self.topbar(bot, cx))
-            .child(panels)
+            .children(panels)
             .child(div().flex_1().min_h_0().flex().flex_col().child(body).with_animation(
                 ElementId::Name(format!("chat-{}", bot.id).into()),
                 Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
@@ -869,24 +870,14 @@ impl Eggbot {
                     .pt_1()
                     .child(
                         link("clock", p)
-                            .when(self.sched_open, |d| d.bg(p.hover).text_color(p.ink))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.sched_open = !this.sched_open;
-                                this.settings_open = false;
-                                this.sched_error = None;
-                                this.edit_open = false;
-                                this.skills_open = false;
-                                if this.sched_open {
-                                    this.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
-                                }
-                                cx.notify();
-                            }))
+                            .when(self.panel == Panel::Schedules, |d| d.bg(p.hover).text_color(p.ink))
+                            .on_click(cx.listener(|this, _, window, cx| this.toggle_schedules(window, cx)))
                             .child(Icon::new(IconName::Clock).size_3())
                             .child(schedules),
                     )
                     .child(
                         link("skills", p)
-                            .when(self.skills_open, |d| d.bg(p.hover).text_color(p.ink))
+                            .when(self.panel == Panel::Skills, |d| d.bg(p.hover).text_color(p.ink))
                             .on_click(cx.listener(|this, _, window, cx| this.toggle_skills(window, cx)))
                             .child(Icon::new(IconName::BookOpen).size_3())
                             .child(skills_label),
@@ -1073,7 +1064,7 @@ impl Eggbot {
                         .when_some(self.edit_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
                         .child(
                             button("cancel-edit", p).on_click(cx.listener(|this, _, _, cx| {
-                                this.edit_open = false;
+                                this.panel = Panel::None;
                                 cx.notify();
                             })).child("Cancel"),
                         )
@@ -1113,7 +1104,7 @@ impl Eggbot {
                     .child(div().text_sm().text_color(p.muted).child("/"))
                     .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(title)),
             )
-            .when(self.settings_open, |d| d.child(self.settings(cx)))
+            .when(self.panel == Panel::Settings, |d| d.child(self.settings(cx)))
             .child(self.room_memory(id))
             .when(reading, |d| {
                 d.child(div().flex_1().min_h_0().flex().flex_col().child(list(self.room_list.clone(), cx.processor(|this: &mut Self, ix: usize, _, cx| this.room_row(ix, cx))).flex_1()))
@@ -1413,7 +1404,7 @@ impl Eggbot {
                     .child(div().text_sm().text_color(p.muted).child("/"))
                     .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(title)),
             )
-            .when(self.settings_open, |d| d.child(self.settings(cx)))
+            .when(self.panel == Panel::Settings, |d| d.child(self.settings(cx)))
             .child(div().id("group-body").flex_1().overflow_y_scroll().child(self.group_setup(cx)))
             .into_any_element()
     }
@@ -1544,7 +1535,7 @@ impl Eggbot {
                         .child(div().flex_1())
                         .child(
                             button("cancel-settings", p).on_click(cx.listener(|this, _, _, cx| {
-                                this.settings_open = false;
+                                this.panel = Panel::None;
                                 cx.notify();
                             })).child("Cancel"),
                         )
