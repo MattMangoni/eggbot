@@ -1962,7 +1962,7 @@ impl Render for Eggbot {
                     this.close_find(window, cx);
                 } else if this.panel != Panel::None {
                     this.close_panel(window, cx);
-                } else {
+                } else if this.open_room.is_none() && this.open_group.is_none() {
                     this.stop(cx);
                 }
             }))
