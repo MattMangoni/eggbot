@@ -1226,6 +1226,16 @@ impl Eggbot {
         self.start_turn(id, pending, cx);
     }
 
+    /// Drops one message the user queued. `at` indexes the bot's whole queue; other kinds of queued work stay.
+    fn unqueue(&mut self, id: usize, at: usize, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        if bot.queue.get(at).is_some_and(|q| q.typed) {
+            bot.queue.remove(at);
+            self.save();
+            cx.notify();
+        }
+    }
+
     /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
     fn start_turn(&mut self, id: usize, mut pending: handoff::Pending, cx: &mut Context<Self>) {
         let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };

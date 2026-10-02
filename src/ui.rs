@@ -1023,13 +1023,10 @@ impl Eggbot {
         let Some(bot) = self.bots.get(self.selected) else { return div().into_any_element() };
         let el = match bot.msgs.get(ix) {
             Some(m) => self.message(bot, ix, m, cx),
-            None => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .when(bot.waiting(), |d| d.child(self.typing(bot)))
-                .children(bot.queue.iter().filter(|q| q.typed).map(|q| self.queued(bot, &q.prompt)))
-                .into_any_element(),
+            None => {
+                let queued: Vec<AnyElement> = bot.queue.iter().enumerate().filter(|(_, q)| q.typed).map(|(at, q)| self.queued(bot, at, &q.prompt, cx)).collect();
+                div().flex().flex_col().gap_3().when(bot.waiting(), |d| d.child(self.typing(bot))).children(queued).into_any_element()
+            }
         };
         let (last, hit) = (ix == bot.msgs.len(), self.find_current() == Some(ix));
         // the 8px inset leaves room for the search highlight without moving the text
@@ -1730,10 +1727,20 @@ impl Eggbot {
             .child(div().child(label).with_animation("pulse", Animation::new(Duration::from_millis(1600)).repeat(), |d, t| d.opacity(0.45 + 0.55 * (t * std::f32::consts::TAU).cos().abs())))
     }
 
-    /// A message typed while the bot works, waiting on its queue. It becomes a normal bubble when its turn starts.
-    fn queued(&self, bot: &Bot, text: &str) -> impl IntoElement {
+    /// A message waiting on the bot's queue ; × drops it. It becomes a normal bubble when its turn starts.
+    fn queued(&self, bot: &Bot, at: usize, text: &str, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let note = if bot.busy() { "Queued · sends after this turn" } else { "Queued" };
+        let id = bot.id;
+        let remove = div()
+            .id(("unqueue", at))
+            .p_1()
+            .rounded(px(4.))
+            .text_color(p.muted)
+            .cursor_pointer()
+            .hover(|d| d.bg(p.hover).text_color(p.ink))
+            .on_click(cx.listener(move |this, _, _, cx| this.unqueue(id, at, cx)))
+            .child(Icon::new(IconName::Close).size_3());
         div().flex().justify_end().child(
             div()
                 .max_w(relative(0.75))
@@ -1745,9 +1752,10 @@ impl Eggbot {
                 .rounded(px(18.))
                 .border_1()
                 .border_color(p.line)
-                .child(div().text_xs().text_color(p.muted).child(note))
+                .child(div().flex().items_center().gap_2().child(div().flex_1().text_xs().text_color(p.muted).child(note)).child(remove))
                 .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.muted).child(text.to_string())),
         )
+        .into_any_element()
     }
 
     fn message(&self, bot: &Bot, i: usize, m: &Msg, cx: &mut Context<Self>) -> AnyElement {
