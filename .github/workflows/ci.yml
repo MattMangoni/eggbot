@@ -1,0 +1,24 @@
+name: CI
+
+# PRs, plus direct pushes to main (most changes land there without a PR)
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # GPUI compiles Metal shaders at build time; newer Xcode ships the Metal compiler separately
+      - name: Metal toolchain
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - run: cargo build --locked
+      - run: cargo test --locked
