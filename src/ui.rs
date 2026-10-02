@@ -18,7 +18,7 @@ use gpui_kit::*;
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Eggbot, Find, OpenSettings, OpenSetup, Panel, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
+use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Dismiss, Eggbot, Find, OpenSettings, OpenSetup, Panel, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
 
 const ROW_H: f32 = 52.;
 const ROW_GAP: f32 = 2.;
@@ -1945,12 +1945,15 @@ impl Render for Eggbot {
             .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-            .on_action(cx.listener(|this, _: &StopTurn, window, cx| {
+            .on_action(cx.listener(|this, _: &StopTurn, _, cx| this.stop(cx)))
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if this.menu_open {
                     this.menu_open = false;
                     cx.notify();
                 } else if this.find_open {
                     this.close_find(window, cx);
+                } else if this.panel != Panel::None {
+                    this.close_panel(window, cx);
                 } else {
                     this.stop(cx);
                 }

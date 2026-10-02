@@ -27,7 +27,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, Dismiss, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -1573,6 +1573,12 @@ impl Eggbot {
         cx.notify();
     }
 
+    fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = Panel::None;
+        self.focus_main(window, cx);
+        cx.notify();
+    }
+
     fn clear_skill_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.skill_at = None;
         self.skill_error = None;
@@ -2512,7 +2518,8 @@ fn main() {
             // ⌘[ / ⌘] are outdent/indent inside text fields, so switching uses ⌃Tab
             KeyBinding::new("ctrl-shift-tab", PrevBot, None),
             KeyBinding::new("ctrl-tab", NextBot, None),
-            KeyBinding::new("escape", StopTurn, None),
+            KeyBinding::new("escape", Dismiss, None),
+            KeyBinding::new("cmd-.", StopTurn, None),
             KeyBinding::new("cmd-shift-d", CycleAppearance, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-f", Find, None),
