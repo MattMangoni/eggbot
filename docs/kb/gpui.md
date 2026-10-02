@@ -104,3 +104,6 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - Jumping to an older row in a `FollowMode::Tail` list: call `pause_following_tail()` before `scroll_to_reveal_item`, or the next layout snaps back to the end. Following resumes when the user scrolls back to the bottom.
 - Hiding the sidebar leaves the traffic lights over the chat top bar. That row needs the same left inset as the sidebar header (`TRAFFIC_INSET` in `src/ui.rs`).
 - `Popover` (gpui-component) needs a `Selectable` trigger such as `Button`; it handles outside clicks and Esc. Its `content` closure runs in the popover's own context, so it reaches the view through a weak entity, and `state.dismiss(window, cx)` closes it.
+- Text fields bind `escape` in their own key context and call `cx.propagate()` when they have nothing to dismiss, so a global `escape` binding still fires from inside a panel field.
+- Edition 2024: a method returning `impl IntoElement` captures `cx`. Turn it into an `AnyElement` before keeping it in a `let` while `cx` is used again.
+- The crate does not build on Linux: `objc2` is Apple-only, and `cargo check --target aarch64-apple-darwin` stops at GPUI's Metal shader step (needs Xcode). CI on `macos-15` is the compile and test check for changes made off a Mac.
