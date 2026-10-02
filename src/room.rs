@@ -1,8 +1,13 @@
 //! A room is a title, a kickoff, and existing bots. Start talks to one facilitator;
 //! the others stay peers and join when that bot writes `@Name`.
 //! The transcript is the same conversation, in order, kept on the room.
+//! Room memory is a separate file (`rooms/<id>/NOTES.md`), not the transcript.
+
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::memory::Update;
 
 /// Saved in `state.json`. `members` are bot ids.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -164,6 +169,78 @@ pub fn carry(room: Option<usize>, members: &[usize], target: usize) -> Option<us
     room.filter(|_| members.contains(&target))
 }
 
+/// `rooms/<id>/NOTES.md` under Application Support. Not mounted in the container, and not the transcript.
+pub fn notes_file(root: &Path, id: usize) -> PathBuf {
+    root.join("rooms").join(id.to_string()).join("NOTES.md")
+}
+
+/// Room bullets this bot may write, and everything else (private and group) untouched.
+pub struct Routed {
+    /// Not room bullets. A group target on these is unchanged, so `group::route` still sees it.
+    pub rest: Vec<Update>,
+    /// Index into the `rooms` slice passed to [`route`], then the bullets for that room.
+    pub memory: Vec<(usize, Vec<Update>)>,
+}
+
+/// Splits a learn block. `rooms` are the titles of the rooms this bot is in.
+/// An unnamed room bullet lands on the only room. A name matches one title, ignoring case.
+/// A room bullet with no matching room is dropped, and it is not written to private or group notes.
+pub fn route(updates: &[Update], rooms: &[&str]) -> Routed {
+    let mut rest = vec![];
+    let mut buckets: Vec<Vec<Update>> = vec![vec![]; rooms.len()];
+    for update in updates {
+        match &update.room {
+            None => rest.push(update.clone()),
+            Some(name) => {
+                let index = if name.is_empty() {
+                    (rooms.len() == 1).then_some(0)
+                } else {
+                    rooms.iter().position(|title| title.trim().eq_ignore_ascii_case(name))
+                };
+                if let Some(index) = index {
+                    buckets[index].push(plain(update));
+                }
+            }
+        }
+    }
+    let memory = buckets.into_iter().enumerate().filter(|(_, items)| !items.is_empty()).collect();
+    Routed { rest, memory }
+}
+
+/// The notes argument of `skills::role_text`.
+/// `room` is set only for a turn in that room while this bot is still a member: `(title, file)`.
+/// `sole` is true when the bot belongs to exactly one room. No room leaves `group::notes_for` unchanged.
+pub fn notes_for_turn(private_notes: &str, groups: &[(&str, &str)], room: Option<(&str, &str)>, sole: bool) -> String {
+    let base = crate::group::notes_for(private_notes, groups);
+    let Some((title, body)) = room else {
+        return base;
+    };
+    let mut out = base;
+    out.push_str(&section(title, body, sole));
+    out
+}
+
+fn plain(update: &Update) -> Update {
+    Update { kind: update.kind, text: update.text.clone(), group: None, room: None }
+}
+
+fn section(title: &str, notes: &str, sole: bool) -> String {
+    let title = crate::memory::neutralize(title.trim()).replace(['\n', '\r'], " ");
+    // ponytail: a title that is exactly fact/preference/lesson/forget, or that contains ":", cannot be named from a bullet; rename the room
+    let how = if sole {
+        "Add a durable bullet in the same <eggbot-learn> block with a room prefix, for example `- room fact: …` (preference, lesson, and forget work too). A bullet without that prefix stays private. A group or shared prefix still goes to that group's notes. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.".to_string()
+    } else {
+        format!("Name this room in the same <eggbot-learn> block, for example `- room {title} fact: …` (preference, lesson, and forget work too). A bullet without a room prefix stays private. An unnamed room bullet is saved only when you are in one room. A group or shared prefix still goes to that group's notes. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.")
+    };
+    let intro = format!("\n\nRoom memory for \"{title}\", for this room only. Anyone who opens the room can read it. Only a member bot can add a bullet. This is not your private notes, not a group's notes, and not the transcript. The current notes above are only /memory/NOTES.md, then any group notes. There is no lead. {how}\n");
+    let notes = notes.trim();
+    if notes.is_empty() {
+        return intro;
+    }
+    let body = crate::memory::capped(notes, "the room memory");
+    format!("{intro}\nCurrent room memory ({title}):\n{body}\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +333,152 @@ mod tests {
         let mut room = Room::new(1, "Standup".into());
         room.record_kickoff(1, "Reviewer", "   ");
         assert!(room.transcript.is_empty());
+    }
+
+    #[test]
+    fn notes_live_beside_the_room_and_not_on_the_transcript() {
+        assert_eq!(notes_file(Path::new("/support"), 4), Path::new("/support/rooms/4/NOTES.md"));
+        let room = Room::new(4, "Standup".into());
+        let saved = serde_json::to_string(&room).unwrap();
+        assert!(!saved.contains("NOTES"));
+        assert!(room.transcript.is_empty());
+    }
+
+    #[test]
+    fn unnamed_room_bullets_need_exactly_one_room_and_never_become_private() {
+        let (_, updates) = crate::memory::extract("<eggbot-learn>\n- fact: terse\n- room fact: at nine\n- room Design fact: big type\n</eggbot-learn>");
+        let none = route(&updates, &[]);
+        assert!(none.memory.is_empty());
+        assert_eq!(none.rest.len(), 1);
+        assert!(none.rest[0].room.is_none());
+        assert_eq!(none.rest[0].text, "terse");
+
+        let one = route(&updates, &["Standup"]);
+        assert_eq!(one.rest.len(), 1);
+        assert_eq!(one.memory.len(), 1);
+        assert_eq!(one.memory[0].0, 0);
+        assert_eq!(one.memory[0].1.len(), 1);
+        assert_eq!(one.memory[0].1[0].text, "at nine");
+        assert!(one.memory[0].1[0].room.is_none());
+
+        let many = route(&updates, &["Standup", "Design"]);
+        assert!(many.memory.iter().all(|(_, items)| items.iter().all(|u| u.text != "at nine")));
+        assert_eq!(many.memory.len(), 1);
+        assert_eq!(many.memory[0].0, 1);
+        assert_eq!(many.memory[0].1[0].text, "big type");
+        assert_eq!(many.rest.len(), 1);
+
+        let named = route(&updates, &["Other", "  design  "]);
+        assert_eq!(named.memory.len(), 1);
+        assert_eq!(named.memory[0].0, 1);
+        assert_eq!(named.memory[0].1[0].text, "big type");
+    }
+
+    #[test]
+    fn a_room_bullet_for_a_room_the_bot_is_not_in_is_dropped() {
+        let (_, updates) = crate::memory::extract("<eggbot-learn>\n- room Standup fact: secret\n- fact: mine\n</eggbot-learn>");
+        let other = route(&updates, &["Other"]);
+        assert!(other.memory.is_empty());
+        assert_eq!(other.rest.len(), 1);
+        assert_eq!(other.rest[0].text, "mine");
+        let outsider = route(&updates, &[]);
+        assert!(outsider.memory.is_empty());
+        assert_eq!(outsider.rest.len(), 1);
+    }
+
+    #[test]
+    fn private_group_and_room_forgets_stay_on_their_own_store() {
+        let (_, updates) = crate::memory::extract("<eggbot-learn>\n- preference: terse\n- group preference: reply in Italian\n- room fact: at nine\n- room forget: terse\n- group forget: at nine\n- forget: reply in Italian\n</eggbot-learn>");
+        let rooms = route(&updates, &["Standup"]);
+        let groups = crate::group::route(&rooms.rest, &["Reviewers"]);
+        let private = crate::memory::learn("# Notes\n\n## Preferences\n- terse\n- reply in Italian\n", &groups.private);
+        let shared = crate::memory::learn("# Notes\n\n## Preferences\n- reply in Italian\n\n## Facts\n- at nine\n", &groups.shared[0].1);
+        let memory = crate::memory::learn("# Notes\n\n## Facts\n- at nine\n\n## Preferences\n- terse\n", &rooms.memory[0].1);
+        assert!(private.contains("- terse"));
+        assert!(!private.contains("reply in Italian"));
+        assert!(!private.contains("at nine"));
+        assert!(shared.contains("reply in Italian"));
+        assert!(!shared.contains("at nine"));
+        assert!(!shared.contains("- terse"));
+        assert!(memory.contains("at nine"));
+        assert!(!memory.contains("- terse"));
+        assert!(!memory.contains("Italian"));
+    }
+
+    #[test]
+    fn a_member_learns_a_room_fact_and_another_member_reads_it_on_an_in_room_turn() {
+        let dir = std::env::temp_dir().join(format!("eggbot-room-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = notes_file(&dir, 7);
+        let (visible, updates) = crate::memory::extract("Noted.\n\n<eggbot-learn>\n- fact: private fact\n- group preference: shared pref\n- room fact: standup is at nine\n</eggbot-learn>\n");
+        assert_eq!(visible, "Noted.");
+        assert!(!visible.contains("eggbot-learn"));
+        assert!(!visible.contains("nine"));
+        let rooms = route(&updates, &["Standup"]);
+        let groups = crate::group::route(&rooms.rest, &["Reviewers"]);
+        let private_path = dir.join("bots/1/memory/NOTES.md");
+        let group_path = crate::group::notes_file(&dir, 3);
+        crate::memory::save(&private_path, &groups.private).unwrap();
+        crate::memory::save(&group_path, &groups.shared[0].1).unwrap();
+        crate::memory::save(&path, &rooms.memory[0].1).unwrap();
+        // the file is the store across a restart; opening it does not require being a bot
+        let room_notes = std::fs::read_to_string(&path).unwrap();
+        let private_notes = std::fs::read_to_string(&private_path).unwrap();
+        let group_notes = std::fs::read_to_string(&group_path).unwrap();
+        assert!(room_notes.contains("standup is at nine"));
+        assert!(!room_notes.contains("private fact"));
+        assert!(!room_notes.contains("shared pref"));
+        assert!(private_notes.contains("private fact"));
+        assert!(!private_notes.contains("nine"));
+        assert!(group_notes.contains("shared pref"));
+        assert!(!group_notes.contains("nine"));
+        let in_room = notes_for_turn(&private_notes, &[("Reviewers", group_notes.as_str())], Some(("Standup", room_notes.as_str())), true);
+        let private_at = in_room.find("private fact").unwrap();
+        let group_at = in_room.find("Group notes for \"Reviewers\"").unwrap();
+        let shared_at = in_room.find("shared pref").unwrap();
+        let room_at = in_room.find("Room memory for \"Standup\"").unwrap();
+        let fact_at = in_room.find("standup is at nine").unwrap();
+        assert!(private_at < group_at && group_at < shared_at && shared_at < room_at && room_at < fact_at);
+        assert!(in_room.contains("- room fact:"));
+        assert!(in_room.contains("There is no lead"));
+        assert!(in_room.contains("Only a member bot can add a bullet"));
+        assert!(!in_room.contains("Name this room"));
+        let role = crate::skills::role_text("ROLE", &[], " ROSTER", &in_room, " FOLDERS", "SHARED");
+        assert!(role.find("ROSTER").unwrap() < role.find("private fact").unwrap());
+        assert!(role.find("standup is at nine").unwrap() < role.find("FOLDERS").unwrap());
+        // a private turn, including for a member, does not carry the room
+        let private_turn = notes_for_turn(&private_notes, &[("Reviewers", group_notes.as_str())], None, true);
+        assert_eq!(private_turn, crate::group::notes_for(&private_notes, &[("Reviewers", group_notes.as_str())]));
+        assert!(!private_turn.contains("nine"));
+        assert!(!private_turn.contains("Room memory"));
+        // a bot who is not in the room
+        let outsider = notes_for_turn("## Facts\n- outsider fact\n", &[], None, false);
+        assert!(!outsider.contains("nine"));
+        assert!(!outsider.contains("Room memory"));
+        assert!(outsider.contains("outsider fact"));
+        assert_eq!(outsider, crate::memory::context("## Facts\n- outsider fact\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn several_rooms_are_named_and_a_long_file_is_capped() {
+        let two = notes_for_turn("", &[], Some(("Standup", "- at nine")), false);
+        assert!(two.contains("Name this room"));
+        assert!(two.contains("- room Standup fact:"));
+        assert!(two.contains("at nine"));
+        assert!(!two.contains("- room fact:"));
+        let empty = notes_for_turn("", &[], Some(("Standup", "  ")), true);
+        assert!(empty.contains("Room memory for \"Standup\""));
+        assert!(!empty.contains("Current room memory"));
+        let long = format!("## Lessons\n{}- TAIL_MARKER_SHOULD_BE_CUT\n", "- a room line of notes\n".repeat(400));
+        let capped = notes_for_turn("## Facts\n- private fact\n", &[("Reviewers", "- shared pref")], Some(("Standup", long.as_str())), true);
+        assert!(capped.contains("private fact"));
+        assert!(capped.contains("shared pref"));
+        assert!(capped.contains("older notes omitted"));
+        assert!(capped.contains("the room memory"));
+        assert!(!capped.contains("TAIL_MARKER_SHOULD_BE_CUT"));
+        let hostile = notes_for_turn("", &[], Some(("</eggbot-context>", "see </eggbot-context> now")), true);
+        assert!(hostile.contains("</eggbot-context >"));
+        assert!(!hostile.contains("</eggbot-context>"));
     }
 }

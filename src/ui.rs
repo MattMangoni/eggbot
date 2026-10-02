@@ -1100,6 +1100,7 @@ impl Eggbot {
                     .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(title)),
             )
             .when(self.settings_open, |d| d.child(self.settings(cx)))
+            .child(self.room_memory(id))
             .when(reading, |d| {
                 d.child(div().flex_1().min_h_0().flex().flex_col().child(list(self.room_list.clone(), cx.processor(|this: &mut Self, ix: usize, _, cx| this.room_row(ix, cx))).flex_1()))
             })
@@ -1107,6 +1108,33 @@ impl Eggbot {
                 d.child(div().px_6().pt_8().text_sm().text_color(p.muted).child("This room already started. New replies show up here; earlier ones stay in each bot's chat."))
             })
             .child(div().when(reading, |d| d.flex_none().max_h(px(320.)).overflow_y_scroll()).when(!reading, |d| d.id("room-body").flex_1().overflow_y_scroll()).child(setup))
+            .into_any_element()
+    }
+
+    /// Room memory, read-only. Anyone who opens the room can read it. Only a member bot can write.
+    fn room_memory(&self, room_id: usize) -> AnyElement {
+        let p = self.p;
+        let notes = std::fs::read_to_string(crate::room::notes_file(&super::data_dir(), room_id)).unwrap_or_default();
+        let notes = notes.trim().to_string();
+        div()
+            .id("room-memory")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .flex_none()
+            .max_h(px(180.))
+            .overflow_y_scroll()
+            .px_6()
+            .py_3()
+            .border_b_1()
+            .border_color(p.line)
+            .child(div().text_xs().text_color(p.muted).child("Memory"))
+            .child(div().text_xs().text_color(p.muted).child("Anyone who opens this room can read this. Only a member bot can add to it. This is not the transcript."))
+            .child(if notes.is_empty() {
+                div().text_sm().text_color(p.muted).child("No memory yet.").into_any_element()
+            } else {
+                div().text_sm().text_color(p.ink).child(TextView::markdown(("room-memory", room_id), notes).selectable(true)).into_any_element()
+            })
             .into_any_element()
     }
 

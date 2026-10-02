@@ -90,7 +90,7 @@ pub fn notes_for(private_notes: &str, groups: &[(&str, &str)]) -> String {
 }
 
 fn plain(update: &Update) -> Update {
-    Update { kind: update.kind, text: update.text.clone(), group: None }
+    Update { kind: update.kind, text: update.text.clone(), group: None, room: None }
 }
 
 fn section(title: &str, notes: &str, sole: bool) -> String {
@@ -116,7 +116,7 @@ mod tests {
     use crate::memory::Kind;
 
     fn upd(kind: Kind, text: &str, group: Option<&str>) -> Update {
-        Update { kind, text: text.into(), group: group.map(str::to_string) }
+        Update { kind, text: text.into(), group: group.map(str::to_string), room: None }
     }
 
     #[test]

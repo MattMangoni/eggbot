@@ -2,7 +2,8 @@
 //!
 //! The file is the store. Each turn's role includes a capped copy, and a reply may
 //! end with an `<eggbot-learn>` block that eggbot merges in and does not show.
-//! A `group` or `shared` prefix on a bullet targets a group's notes instead (`group.rs`).
+//! A `group` or `shared` prefix on a bullet targets a group's notes (`group.rs`).
+//! A `room` prefix targets that room's memory (`room.rs`). A bullet is only one of these.
 
 /// Bullets kept per section. Older ones fall off the end.
 const MAX_BULLETS: usize = 16; // ponytail: 16 bullets a section, raise the cap or summarize when a bot needs a longer memory
@@ -28,6 +29,9 @@ pub struct Update {
     /// None writes this bot's private notes. Some(name) writes a group's notes:
     /// an empty name means the only group this bot is in.
     pub group: Option<String>,
+    /// None is not a room bullet. Some(name) writes a room's memory:
+    /// an empty name means the only room this bot is in. Never set with `group`.
+    pub room: Option<String>,
 }
 
 /// Pulls learn-blocks out of a reply. The visible text is what the user and the next bot see.
@@ -152,38 +156,43 @@ fn parse_update(line: &str) -> Option<Update> {
     if rest.is_empty() {
         return None;
     }
-    let (group, kind, text) = match rest.split_once(':') {
+    let (group, room, kind, text) = match rest.split_once(':') {
         Some((label, text)) => split_label(label.trim(), text.trim(), rest),
-        None => (None, Kind::Lesson, rest),
+        None => (None, None, Kind::Lesson, rest),
     };
     let text = clip(text);
     if text.is_empty() || placeholder(&text) {
         return None;
     }
-    Some(Update { kind, text, group })
+    Some(Update { kind, text, group, room })
 }
 
-/// `group` / `shared` at the start of the label targets a group. The last word is the kind
-/// when it is one; the words between are the group title. Anything else stays private.
-fn split_label<'a>(label: &str, text: &'a str, rest: &'a str) -> (Option<String>, Kind, &'a str) {
+/// `group` / `shared` at the start of the label targets a group. `room` targets a room.
+/// The last word is the kind when it is one; the words between are the title. Anything else stays private.
+fn split_label<'a>(label: &str, text: &'a str, rest: &'a str) -> (Option<String>, Option<String>, Kind, &'a str) {
     let words: Vec<&str> = label.split_whitespace().collect();
-    let targeted = words.first().is_some_and(|word| {
-        let word = word.to_ascii_lowercase();
-        matches!(word.as_str(), "group" | "shared")
-    });
-    if !targeted {
+    let first = words.first().map(|word| word.to_ascii_lowercase());
+    let room_scope = first.as_deref() == Some("room");
+    let group_scope = first.as_deref().is_some_and(|word| matches!(word, "group" | "shared"));
+    if !room_scope && !group_scope {
         return match kind_of(label) {
-            Some(kind) => (None, kind, text),
-            None => (None, Kind::Lesson, rest),
+            Some(kind) => (None, None, kind, text),
+            None => (None, None, Kind::Lesson, rest),
         };
     }
     let tail = &words[1..];
-    if let Some((last, name)) = tail.split_last()
+    let (name, kind) = if let Some((last, name)) = tail.split_last()
         && let Some(kind) = kind_of(last)
     {
-        return (Some(name.join(" ")), kind, text);
+        (name.join(" "), kind)
+    } else {
+        (tail.join(" "), Kind::Lesson)
+    };
+    if room_scope {
+        (None, Some(name), kind, text)
+    } else {
+        (Some(name), None, kind, text)
     }
-    (Some(tail.join(" ")), Kind::Lesson, text)
 }
 
 fn kind_of(label: &str) -> Option<Kind> {
@@ -403,7 +412,7 @@ mod tests {
     use super::*;
 
     fn upd(kind: Kind, text: &str) -> Update {
-        Update { kind, text: text.into(), group: None }
+        Update { kind, text: text.into(), group: None, room: None }
     }
 
     #[test]
@@ -560,10 +569,26 @@ mod tests {
         assert_eq!(
             updates,
             vec![
-                Update { kind: Kind::Preference, text: "reply in Italian".into(), group: Some(String::new()) },
-                Update { kind: Kind::Fact, text: "uses OrbStack".into(), group: Some("Reviewers".into()) },
-                Update { kind: Kind::Lesson, text: "check tests".into(), group: Some("Code Reviewers".into()) },
+                Update { kind: Kind::Preference, text: "reply in Italian".into(), group: Some(String::new()), room: None },
+                Update { kind: Kind::Fact, text: "uses OrbStack".into(), group: Some("Reviewers".into()), room: None },
+                Update { kind: Kind::Lesson, text: "check tests".into(), group: Some("Code Reviewers".into()), room: None },
                 upd(Kind::Preference, "terse"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_room_prefix_is_a_target_and_the_block_still_hides() {
+        let (visible, updates) = extract("Done.\n<eggbot-learn>\n- room fact: standup is at nine\n- room Standup preference: reply in Italian\n- Room Design Review lesson: check tests\n- fact: terse\n- room fact: …\n</eggbot-learn>\n");
+        assert_eq!(visible, "Done.");
+        assert!(!visible.contains("nine"));
+        assert_eq!(
+            updates,
+            vec![
+                Update { kind: Kind::Fact, text: "standup is at nine".into(), group: None, room: Some(String::new()) },
+                Update { kind: Kind::Preference, text: "reply in Italian".into(), group: None, room: Some("Standup".into()) },
+                Update { kind: Kind::Lesson, text: "check tests".into(), group: None, room: Some("Design Review".into()) },
+                upd(Kind::Fact, "terse"),
             ]
         );
     }

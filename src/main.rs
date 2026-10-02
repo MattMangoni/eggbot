@@ -410,7 +410,8 @@ fn data_dir() -> PathBuf {
 /// Merges an `<eggbot-learn>` block into NOTES.md and returns the reply without that block.
 /// `start` is `reply_from`, so only this turn's bubbles change.
 /// `groups` are `(id, title)` for groups this bot is in. A group bullet is saved on that group, not privately.
-fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], reply: &str, start: usize) -> String {
+/// `rooms` are `(id, title)` for rooms this bot is in. A room bullet is saved on that room, not privately.
+fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], rooms: &[(usize, String)], reply: &str, start: usize) -> String {
     let (visible, updates) = memory::extract(reply);
     if visible != reply {
         // the block can span streamed chunks, so one visible reply replaces them
@@ -433,8 +434,10 @@ fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], reply: &str, start: usi
     if updates.is_empty() {
         return visible;
     }
+    let room_titles: Vec<&str> = rooms.iter().map(|(_, title)| title.as_str()).collect();
+    let routed_rooms = room::route(&updates, &room_titles);
     let titles: Vec<&str> = groups.iter().map(|(_, title)| title.as_str()).collect();
-    let routed = group::route(&updates, &titles);
+    let routed = group::route(&routed_rooms.rest, &titles);
     let private_path = data_dir().join("bots").join(bot.id.to_string()).join("memory").join("NOTES.md");
     if let Err(e) = memory::save(&private_path, &routed.private) {
         eprintln!("eggbot: could not save notes: {e}");
@@ -443,6 +446,12 @@ fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], reply: &str, start: usi
         let path = group::notes_file(&data_dir(), groups[*index].0);
         if let Err(e) = memory::save(&path, updates) {
             eprintln!("eggbot: could not save group notes: {e}");
+        }
+    }
+    for (index, updates) in &routed_rooms.memory {
+        let path = room::notes_file(&data_dir(), rooms[*index].0);
+        if let Err(e) = memory::save(&path, updates) {
+            eprintln!("eggbot: could not save room memory: {e}");
         }
     }
     visible
@@ -1217,6 +1226,12 @@ impl Eggbot {
             (g.title.clone(), notes)
         }).collect();
         let group_refs: Vec<(&str, &str)> = membership.iter().map(|(title, notes)| (title.as_str(), notes.as_str())).collect();
+        // room memory rides only on a turn already in that room; a private turn stays private
+        let acting_room = pending.room.and_then(|rid| {
+            self.rooms.iter().find(|r| r.id == rid && r.members.contains(&id)).map(|r| (r.id, r.title.clone()))
+        });
+        let sole_room = self.rooms.iter().filter(|r| r.members.contains(&id)).count() == 1;
+        let room_body = acting_room.as_ref().map(|(rid, _)| std::fs::read_to_string(room::notes_file(&data_dir(), *rid)).unwrap_or_default()).unwrap_or_default();
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         let (hops, fresh) = (pending.hops, pending.fresh);
         let prompt = pending.prompt.clone();
@@ -1234,8 +1249,10 @@ impl Eggbot {
             }
         }
         let notes = std::fs::read_to_string(memory.join("NOTES.md")).unwrap_or_default();
-        // skills stay between the role and the roster; notes stay the notes argument, plus this bot's groups
-        let role = skills::role_text(bot.role(), &bot.skills, &others, &group::notes_for(&notes, &group_refs), &sandbox::folders_note(&bot.folders), &shared);
+        let room_for_turn = acting_room.as_ref().map(|(_, title)| (title.as_str(), room_body.as_str()));
+        // skills stay between the role and the roster; notes are private, then group, then this room
+        let notes_arg = room::notes_for_turn(&notes, &group_refs, room_for_turn, sole_room);
+        let role = skills::role_text(bot.role(), &bot.skills, &others, &notes_arg, &sandbox::folders_note(&bot.folders), &shared);
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
@@ -1651,8 +1668,9 @@ impl Eggbot {
             cx.notify();
             return;
         }
-        // collected before the bot borrow; a group bullet is written only for a group this bot is in now
+        // collected before the bot borrow; a group or room bullet is written only where this bot is a member now
         let groups: Vec<(usize, String)> = group::of_bot(&self.groups, id).into_iter().map(|g| (g.id, g.title.clone())).collect();
+        let rooms: Vec<(usize, String)> = self.rooms.iter().filter(|r| r.members.contains(&id)).map(|r| (r.id, r.title.clone())).collect();
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         bot.status = match ev {
             Ev::Status(ref s) => Some(s.clone()),
@@ -1716,7 +1734,7 @@ impl Eggbot {
                 let hops = bot.hops;
                 let fresh_turn = bot.fresh_turn;
                 // hide the learn block before the transcript, handoff, quiet-check, or alert
-                let reply = if ok { keep_notes(bot, &groups, &reply, start) } else { reply };
+                let reply = if ok { keep_notes(bot, &groups, &rooms, &reply, start) } else { reply };
                 // a scheduled run with nothing to say stays out of the way
                 let quiet = ok && fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
                 if quiet {
@@ -1873,6 +1891,8 @@ impl Eggbot {
         }
         self.confirm_delete_room = None;
         self.save();
+        let dir = data_dir().join("rooms").join(id.to_string());
+        cx.background_executor().spawn(async move { let _ = std::fs::remove_dir_all(dir); }).detach();
         cx.notify();
     }
 
