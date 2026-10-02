@@ -2432,6 +2432,7 @@ mod persist_tests {
         assert!(!outsider.contains("Group notes"));
     }
 
+    #[test]
     fn notes_and_roster_follow_skills() {
         let skills = skills::defaults("Implementer");
         let notes = memory::context("## Facts\n- likes short replies\n");
