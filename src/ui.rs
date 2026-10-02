@@ -705,7 +705,8 @@ impl Eggbot {
                         .gap_3()
                         .child(egg("empty", hex(0xE3D2B9), 32., Mood::Still))
                         .child(div().text_2xl().text_color(p.ink).child("No bots yet"))
-                        .child(div().text_sm().text_color(p.muted).child("Create one with + in the sidebar.")),
+                        .child(div().text_sm().text_color(p.muted).child("Create one with + in the sidebar."))
+                        .child(div().text_xs().text_color(p.muted).child("Or press ⌘N.")),
                 )
                 .into_any_element();
         };
