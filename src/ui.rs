@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, Textarea};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::select::Select;
@@ -541,72 +543,84 @@ impl Eggbot {
             .with_animation("menu-in", Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
 
-    /// Header chips: each mounted folder, with remove, and a button that adds more.
-    fn folder_chips(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The top-bar folders button: "Add folder" with none, else the folder name or count, opening a list to remove or add.
+    fn folders_button(&self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
-        let id = bot.id;
-        let chips = bot.folders.iter().enumerate().map(|(i, f)| {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_1()
-                .h(px(24.))
-                .pl_2()
-                .pr(px(2.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(p.line)
-                .text_xs()
-                .text_color(p.ink)
-                .child(Icon::new(IconName::Folder).size_3().text_color(p.muted))
-                .child(div().max_w(px(220.)).truncate().child(short_path(&f.path)))
-                .child(
+        let label = match bot.folders.as_slice() {
+            [] => "Add folder".to_string(),
+            [f] => f.name.clone(),
+            all => format!("{} folders", all.len()),
+        };
+        let trigger = Button::new("folders").ghost().xsmall().icon(IconName::Folder).label(label);
+        if bot.folders.is_empty() {
+            return trigger.on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))).into_any_element();
+        }
+        // the caret marks it as a dropdown; "Add folder" above opens the picker directly
+        let trigger = trigger.dropdown_caret(true);
+        let (me, id, folders) = (cx.entity().downgrade(), bot.id, bot.folders.clone());
+        Popover::new("folders-list")
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let rows = folders.iter().enumerate().map(|(i, f)| {
+                    let parent = f.path.parent().map(short_path).unwrap_or_default();
+                    let me = me.clone();
                     div()
-                        .id(("unmount", id * 32 + i))
+                        .id(("folder-row", i))
+                        .group("folder-row")
                         .flex()
                         .items_center()
-                        .justify_center()
-                        .size(px(18.))
-                        .rounded(px(4.))
-                        .text_color(p.muted)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(p.hover).text_color(p.ink))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.remove_folder(id, i, cx);
-                        }))
-                        .child(Icon::new(IconName::Close).size_3()),
-                )
-        });
-        div()
-            .id("folder-chips")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_x_scroll()
-            .flex()
-            .items_center()
-            .gap_1()
-            .children(chips)
-            .child(
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.))
+                        .hover(|d| d.bg(p.hover))
+                        .child(Icon::new(IconName::Folder).size_3p5().text_color(p.muted))
+                        .child(div().flex().flex_col().flex_1().min_w_0().child(div().text_sm().text_color(p.ink).truncate().child(f.name.clone())).child(div().text_xs().text_color(p.muted).truncate().child(parent)))
+                        .child(
+                            div()
+                                .id(("unmount", i))
+                                .p_1()
+                                .rounded(px(4.))
+                                .text_color(p.muted)
+                                .cursor_pointer()
+                                .invisible()
+                                .group_hover("folder-row", |s| s.visible())
+                                .hover(|d| d.text_color(p.ink))
+                                .on_click(move |_, _, cx| {
+                                    me.update(cx, |this, cx| this.remove_folder(id, i, cx)).ok();
+                                })
+                                .child(Icon::new(IconName::Close).size_3()),
+                        )
+                });
+                let me = me.clone();
                 div()
-                    .id("add-folder")
-                    .flex_none()
+                    .w(px(300.))
                     .flex()
-                    .items_center()
-                    .gap_1()
-                    .h(px(24.))
-                    .px_2()
-                    .rounded(px(6.))
-                    .text_xs()
-                    .text_color(p.muted)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(p.hover).text_color(p.ink))
-                    .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx)))
-                    .child(Icon::new(IconName::Plus).size_3())
-                    .child(if bot.folders.is_empty() { "Add folder" } else { "Add" }),
-            )
+                    .flex_col()
+                    .children(rows)
+                    .child(div().h(px(1.)).my_1().bg(p.line))
+                    .child(
+                        div()
+                            .id("folder-add")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .text_sm()
+                            .text_color(p.ink)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.hover))
+                            .on_click(cx.listener(move |state, _, window, cx| {
+                                state.dismiss(window, cx);
+                                me.update(cx, |this, cx| this.pick_folder(cx)).ok();
+                            }))
+                            .child(Icon::new(IconName::Plus).size_3p5().text_color(p.muted))
+                            .child("Add folder…"),
+                    )
+            })
+            .into_any_element()
     }
 
     fn topbar(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
@@ -648,7 +662,8 @@ impl Eggbot {
                     .child(bot.name.clone())
                     .child(Icon::new(IconName::ChevronDown).size_3().text_color(p.muted)),
             )
-            .child(self.folder_chips(bot, cx))
+            .child(div().ml_1().child(self.folders_button(bot, cx)))
+            .child(div().flex_1())
             .child(div().mr_2().child(self.find_bar(cx)))
             .when(bot.context.1 > 0, |d| {
                 let used = bot.context.0 as f32 / bot.context.1 as f32;
@@ -852,7 +867,6 @@ impl Eggbot {
                     .gap_1()
                     .px_2p5()
                     .pt_1()
-                    .child(link("folder", p).on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))).child(Icon::new(IconName::Folder).size_3()).child("Add folder"))
                     .child(
                         link("clock", p)
                             .when(self.sched_open, |d| d.bg(p.hover).text_color(p.ink))
