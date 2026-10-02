@@ -1897,6 +1897,7 @@ impl Render for Eggbot {
         if self.selects_stale {
             self.sync_selects(window, cx);
         }
+        self.sync_draft(window, cx);
         self.sync_list();
         self.sync_room_list();
         // no background here: the window is blurred behind the translucent sidebar
