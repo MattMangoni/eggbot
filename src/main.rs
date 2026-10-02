@@ -1,6 +1,7 @@
 mod claude;
 mod codex;
 mod egg;
+mod group;
 mod handoff;
 mod login;
 mod memory;
@@ -408,7 +409,8 @@ fn data_dir() -> PathBuf {
 
 /// Merges an `<eggbot-learn>` block into NOTES.md and returns the reply without that block.
 /// `start` is `reply_from`, so only this turn's bubbles change.
-fn keep_notes(bot: &mut Bot, reply: &str, start: usize) -> String {
+/// `groups` are `(id, title)` for groups this bot is in. A group bullet is saved on that group, not privately.
+fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], reply: &str, start: usize) -> String {
     let (visible, updates) = memory::extract(reply);
     if visible != reply {
         // the block can span streamed chunks, so one visible reply replaces them
@@ -431,22 +433,16 @@ fn keep_notes(bot: &mut Bot, reply: &str, start: usize) -> String {
     if updates.is_empty() {
         return visible;
     }
-    let dir = data_dir().join("bots").join(bot.id.to_string()).join("memory");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    let titles: Vec<&str> = groups.iter().map(|(_, title)| title.as_str()).collect();
+    let routed = group::route(&updates, &titles);
+    let private_path = data_dir().join("bots").join(bot.id.to_string()).join("memory").join("NOTES.md");
+    if let Err(e) = memory::save(&private_path, &routed.private) {
         eprintln!("eggbot: could not save notes: {e}");
-        return visible;
     }
-    let path = dir.join("NOTES.md");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let merged = memory::learn(&existing, &updates);
-    if merged != existing {
-        let write = if merged.trim().is_empty() {
-            std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-        } else {
-            std::fs::write(&path, merged)
-        };
-        if let Err(e) = write {
-            eprintln!("eggbot: could not save notes: {e}");
+    for (index, updates) in &routed.shared {
+        let path = group::notes_file(&data_dir(), groups[*index].0);
+        if let Err(e) = memory::save(&path, updates) {
+            eprintln!("eggbot: could not save group notes: {e}");
         }
     }
     visible
@@ -479,6 +475,10 @@ struct Saved {
     next_room_id: usize,
     #[serde(default)]
     rooms: Vec<room::Room>,
+    #[serde(default)]
+    next_group_id: usize,
+    #[serde(default)]
+    groups: Vec<group::Group>,
 }
 
 fn default_sidebar() -> f32 {
@@ -573,6 +573,13 @@ struct Eggbot {
     room_status: Option<String>,
     /// Room id whose Delete was clicked once.
     confirm_delete_room: Option<usize>,
+    groups: Vec<group::Group>,
+    next_group_id: usize,
+    /// The group open in the main pane. A group is notes, not a room.
+    open_group: Option<usize>,
+    group_title: Entity<InputState>,
+    /// Group id whose Delete was clicked once.
+    confirm_delete_group: Option<usize>,
     /// Dragging the sidebar's edge.
     resizing: bool,
     /// The chat's virtual list: one row per message of the selected bot, plus the typing row.
@@ -640,6 +647,7 @@ impl Eggbot {
             kickoff.set_auto_grow(3, 8, cx);
             kickoff
         });
+        let group_title = cx.new(|cx| InputState::new(window, cx).placeholder("Reviewers"));
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
@@ -694,6 +702,12 @@ impl Eggbot {
             }
         })
         .detach();
+        cx.subscribe_in(&group_title, window, |this, _, ev: &InputEvent, _, cx| {
+            if let InputEvent::Change = ev {
+                this.group_title_changed(cx);
+            }
+        })
+        .detach();
         for field in [&sched_prompt, &sched_value] {
             cx.subscribe_in(field, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -735,11 +749,11 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None, groups: vec![], next_group_id: 0, open_group: None, group_title, confirm_delete_group: None };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
         match saved {
-            Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() => {
+            Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() || !s.groups.is_empty() => {
                 (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared, this.throttle, this.pause) = (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
                 for b in &mut this.bots {
                     sandbox::adopt_legacy(&mut b.folders, b.folder.take());
@@ -747,6 +761,9 @@ impl Eggbot {
                 this.rooms = s.rooms;
                 let used = this.rooms.iter().map(|r| r.id.saturating_add(1)).max().unwrap_or(0);
                 this.next_room_id = s.next_room_id.max(used);
+                this.groups = s.groups;
+                let used = this.groups.iter().map(|g| g.id.saturating_add(1)).max().unwrap_or(0);
+                this.next_group_id = s.next_group_id.max(used);
                 this.restore_handoffs();
             }
             _ => {
@@ -879,7 +896,7 @@ impl Eggbot {
 
     fn save(&self) {
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -890,6 +907,7 @@ impl Eggbot {
 
     fn hatch(&mut self, preset: usize) {
         self.leave_room();
+        self.leave_group();
         self.skills_open = false;
         self.skill_at = None;
         let base = PRESETS[preset].name;
@@ -936,6 +954,7 @@ impl Eggbot {
 
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_room();
+        self.leave_group();
         self.selected = i;
         self.mark_read(cx);
         self.selects_stale = true;
@@ -1107,7 +1126,7 @@ impl Eggbot {
 
     /// The selected bot has been seen. A room dot clears once none of its bots are still unread.
     fn mark_read(&mut self, cx: &mut Context<Self>) {
-        if self.open_room.is_some() {
+        if self.open_room.is_some() || self.open_group.is_some() {
             return;
         }
         let Some(b) = self.bots.get_mut(self.selected).filter(|b| b.unread) else { return };
@@ -1193,6 +1212,11 @@ impl Eggbot {
         let roster_refs: Vec<(usize, &str, &str)> = roster_bots.iter().map(|(i, name, blurb)| (*i, name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster_refs, id, &recent, &room_refs);
         let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());
+        let membership: Vec<(String, String)> = group::of_bot(&self.groups, id).into_iter().map(|g| {
+            let notes = std::fs::read_to_string(group::notes_file(&data_dir(), g.id)).unwrap_or_default();
+            (g.title.clone(), notes)
+        }).collect();
+        let group_refs: Vec<(&str, &str)> = membership.iter().map(|(title, notes)| (title.as_str(), notes.as_str())).collect();
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         let (hops, fresh) = (pending.hops, pending.fresh);
         let prompt = pending.prompt.clone();
@@ -1210,8 +1234,8 @@ impl Eggbot {
             }
         }
         let notes = std::fs::read_to_string(memory.join("NOTES.md")).unwrap_or_default();
-        // skills stay between the role and the roster; notes stay the notes argument
-        let role = skills::role_text(bot.role(), &bot.skills, &others, &memory::context(&notes), &sandbox::folders_note(&bot.folders), &shared);
+        // skills stay between the role and the roster; notes stay the notes argument, plus this bot's groups
+        let role = skills::role_text(bot.role(), &bot.skills, &others, &group::notes_for(&notes, &group_refs), &sandbox::folders_note(&bot.folders), &shared);
         let send_role = bot.provider == Provider::Codex && (fresh || bot.thread.is_none() || bot.codex_role.as_ref() != Some(&role));
         bot.pending_role = (send_role && !fresh).then(|| role.clone());
         let turn = claude::Turn {
@@ -1627,6 +1651,8 @@ impl Eggbot {
             cx.notify();
             return;
         }
+        // collected before the bot borrow; a group bullet is written only for a group this bot is in now
+        let groups: Vec<(usize, String)> = group::of_bot(&self.groups, id).into_iter().map(|g| (g.id, g.title.clone())).collect();
         let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
         bot.status = match ev {
             Ev::Status(ref s) => Some(s.clone()),
@@ -1690,7 +1716,7 @@ impl Eggbot {
                 let hops = bot.hops;
                 let fresh_turn = bot.fresh_turn;
                 // hide the learn block before the transcript, handoff, quiet-check, or alert
-                let reply = if ok { keep_notes(bot, &reply, start) } else { reply };
+                let reply = if ok { keep_notes(bot, &groups, &reply, start) } else { reply };
                 // a scheduled run with nothing to say stays out of the way
                 let quiet = ok && fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
                 if quiet {
@@ -1770,6 +1796,7 @@ impl Eggbot {
         }
         let Some(room) = self.rooms.iter().find(|r| r.id == id) else { return };
         let (title, kickoff) = (room.title.clone(), room.kickoff.clone());
+        self.leave_group();
         self.leave_room();
         if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
             room.unread = false;
@@ -1849,6 +1876,74 @@ impl Eggbot {
         cx.notify();
     }
 
+    fn leave_group(&mut self) {
+        if self.open_group.take().is_some() {
+            self.confirm_delete_group = None;
+        }
+    }
+
+    fn show_group(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_group == Some(id) {
+            return;
+        }
+        let Some(title) = self.groups.iter().find(|g| g.id == id).map(|g| g.title.clone()) else { return };
+        self.leave_room();
+        self.open_group = Some(id);
+        self.confirm_delete_group = None;
+        (self.menu_open, self.edit_open, self.sched_open, self.skills_open, self.settings_open) = (false, false, false, false, false);
+        (self.find_open, self.find_hits) = (false, vec![]);
+        self.group_title.update(cx, |s, cx| {
+            s.set_value(title, window, cx);
+            s.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn new_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let taken = |n: &str| self.groups.iter().any(|g| g.title == n);
+        let title = (1..).map(|i| if i == 1 { "Group".to_string() } else { format!("Group {i}") }).find(|n| !taken(n)).unwrap();
+        let id = self.next_group_id;
+        self.next_group_id += 1;
+        self.groups.push(group::Group::new(id, title));
+        self.save();
+        self.show_group(id, window, cx);
+    }
+
+    fn group_title_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.open_group else { return };
+        let value = self.group_title.read(cx).value().to_string();
+        let Some(group) = self.groups.iter_mut().find(|g| g.id == id) else { return };
+        group.title = value;
+        self.confirm_delete_group = None;
+        self.save();
+        cx.notify();
+    }
+
+    fn toggle_group_member(&mut self, group_id: usize, bot_id: usize, cx: &mut Context<Self>) {
+        let Some(group) = self.groups.iter_mut().find(|g| g.id == group_id) else { return };
+        group.members = group::toggle(std::mem::take(&mut group.members), bot_id);
+        self.confirm_delete_group = None;
+        self.save();
+        cx.notify();
+    }
+
+    fn delete_group(&mut self, id: usize, cx: &mut Context<Self>) {
+        if self.confirm_delete_group != Some(id) {
+            self.confirm_delete_group = Some(id);
+            cx.notify();
+            return;
+        }
+        self.groups.retain(|g| g.id != id);
+        if self.open_group == Some(id) {
+            self.open_group = None;
+        }
+        self.confirm_delete_group = None;
+        self.save();
+        let dir = data_dir().join("groups").join(id.to_string());
+        cx.background_executor().spawn(async move { let _ = std::fs::remove_dir_all(dir); }).detach();
+        cx.notify();
+    }
+
     /// Sends the kickoff to the facilitator only. Peers join later through `@Name`.
     fn start_room(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.open_room else { return };
@@ -1898,7 +1993,9 @@ impl Eggbot {
     }
 
     fn focus_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open_room.is_some() {
+        if self.open_group.is_some() {
+            self.group_title.update(cx, |s, cx| s.focus(window, cx));
+        } else if self.open_room.is_some() {
             self.room_kickoff.update(cx, |s, cx| s.focus(window, cx));
         } else {
             self.input.update(cx, |s, cx| s.focus(window, cx));
@@ -1914,6 +2011,9 @@ impl Eggbot {
         self.bots.remove(i);
         for room in &mut self.rooms {
             (room.members, room.facilitator) = room::forget(std::mem::take(&mut room.members), room.facilitator, id);
+        }
+        for group in &mut self.groups {
+            group.members = group::forget(std::mem::take(&mut group.members), id);
         }
         self.selected = self.selected.min(self.bots.len().saturating_sub(1));
         self.confirm_delete = None;
@@ -2294,6 +2394,22 @@ mod persist_tests {
     }
 
     #[test]
+    fn group_notes_sit_with_private_notes_after_the_roster() {
+        let notes = group::notes_for("## Facts\n- private fact\n", &[("Reviewers", "## Preferences\n- reply in Italian\n")]);
+        let skills = skills::defaults("Reviewer");
+        let got = skills::role_text("ROLE", &skills, " ROSTER", &notes, " FOLDERS", "SHARED");
+        let roster = got.find("ROSTER").unwrap();
+        let private = got.find("private fact").unwrap();
+        let shared = got.find("reply in Italian").unwrap();
+        let folders = got.find("FOLDERS").unwrap();
+        assert!(roster < private && private < shared && shared < folders);
+        assert!(got.contains("Group notes for \"Reviewers\""));
+        assert!(got.ends_with("SHARED"));
+        let outsider = skills::role_text("ROLE", &[], " ROSTER", &group::notes_for("## Facts\n- private fact\n", &[]), "", "SHARED");
+        assert!(!outsider.contains("Italian"));
+        assert!(!outsider.contains("Group notes"));
+    }
+
     fn notes_and_roster_follow_skills() {
         let skills = skills::defaults("Implementer");
         let notes = memory::context("## Facts\n- likes short replies\n");
@@ -2324,7 +2440,7 @@ mod persist_tests {
         assert_eq!(saved.bots[0].current.as_ref().map(|p| p.prompt.as_str()), Some("look"));
         assert_eq!(saved.bots[0].folders[0].name, "proj");
         // same keys save() writes; queue, current, and folders ride inside bots
-        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause, "next_room_id": saved.next_room_id, "rooms": saved.rooms });
+        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause, "next_room_id": saved.next_room_id, "rooms": saved.rooms, "next_group_id": saved.next_group_id, "groups": saved.groups });
         let again: Saved = serde_json::from_value(state).unwrap();
         assert_eq!(again.bots[0].queue[0].prompt, "ship it");
         assert_eq!(again.bots[0].current.as_ref().unwrap().hops, 1);
@@ -2333,13 +2449,17 @@ mod persist_tests {
         assert!(again.bots[0].folder.is_none());
         assert_eq!(usage::percent(again.pause), 95);
         assert!(saved.rooms.is_empty());
+        assert!(saved.groups.is_empty());
         assert_eq!(again.next_room_id, 0);
+        assert_eq!(again.next_group_id, 0);
 
         let legacy = r#"{"next_id":1,"bots":[]}"#;
         let old: Saved = serde_json::from_str(legacy).unwrap();
         assert_eq!(old.throttle, usage::DEFAULT_THROTTLE);
         assert_eq!(old.pause, usage::DEFAULT_PAUSE);
         assert!(old.rooms.is_empty());
+        assert!(old.groups.is_empty());
+        assert_eq!(old.next_group_id, 0);
     }
 }
 
@@ -2430,7 +2550,9 @@ mod tests {
     fn rooms_round_trip_and_old_state_has_none() {
         let old: Saved = serde_json::from_str(r#"{"next_id":0,"bots":[]}"#).unwrap();
         assert!(old.rooms.is_empty());
+        assert!(old.groups.is_empty());
         assert_eq!(old.next_room_id, 0);
+        assert_eq!(old.next_group_id, 0);
         let saved: Saved = serde_json::from_str(r#"{"next_id":2,"bots":[],"next_room_id":4,"rooms":[{"id":3,"title":"Standup","kickoff":"What shipped?","members":[1,2],"facilitator":1,"unread":true,"started":true}]}"#).unwrap();
         assert_eq!(saved.next_room_id, 4);
         assert_eq!(saved.rooms[0].title, "Standup");
@@ -2444,6 +2566,21 @@ mod tests {
         assert_eq!(with_log.rooms[0].transcript.len(), 3);
         let again: Saved = serde_json::from_str(&serde_json::to_string(&with_log).unwrap()).unwrap();
         assert_eq!(again.rooms[0].transcript, with_log.rooms[0].transcript);
+    }
+
+    #[test]
+    fn groups_round_trip_and_old_state_has_none() {
+        let old: Saved = serde_json::from_str(r#"{"next_id":0,"bots":[]}"#).unwrap();
+        assert!(old.groups.is_empty());
+        assert_eq!(old.next_group_id, 0);
+        let saved: Saved = serde_json::from_str(r#"{"next_id":2,"bots":[],"next_group_id":4,"groups":[{"id":3,"title":"Reviewers","members":[1,2]}]}"#).unwrap();
+        assert_eq!(saved.next_group_id, 4);
+        assert_eq!(saved.groups[0].title, "Reviewers");
+        assert_eq!(saved.groups[0].members, vec![1, 2]);
+        assert!(saved.rooms.is_empty());
+        let again: Saved = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(again.groups, saved.groups);
+        assert_eq!(again.next_group_id, 4);
     }
 
     #[test]

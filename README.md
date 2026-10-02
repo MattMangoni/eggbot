@@ -44,7 +44,7 @@ Subscription plans assume individual use, and many busy bots use your plan limit
 
 ## Data
 
-State lives in `~/Library/Application Support/eggbot/` (`state.json`, and per bot `bots/<id>/work` and `bots/<id>/memory`). Delete that folder to start fresh.
+State lives in `~/Library/Application Support/eggbot/` (`state.json`, per bot `bots/<id>/work` and `bots/<id>/memory`, and per group `groups/<id>/NOTES.md`). Delete that folder to start fresh.
 
 ## Development
 

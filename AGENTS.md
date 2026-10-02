@@ -15,7 +15,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `cargo build` — compile only. First build takes minutes (GPUI).
 - `cargo test` — parser check.
 - `scripts/bundle.sh` — release build → `eggbot.app` (id `com.digitalmaze.eggbot`, ad-hoc signed) in `~/Applications`. Notifications only work from the bundle.
-- App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/work` scratch, `bots/<id>/memory` notes). Delete it to start fresh.
+- App data: `~/Library/Application Support/eggbot/` (`state.json`, `bots/<id>/work` scratch, `bots/<id>/memory` notes, `groups/<id>/NOTES.md` shared notes). Delete it to start fresh.
 
 ## Layout
 
@@ -25,6 +25,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/codex.rs` — Codex runner over `codex app-server` JSON-RPC, notification parser (tested), account/models query.
 - `src/handoff.rs` — `@Name` mention parsing, roster and handoff prompt (tested).
 - `src/memory.rs` — durable notes: learn-block capture, dedupe, role injection (tested).
+- `src/group.rs` — group membership and shared notes (tested). Not a room.
 - `src/room.rs` — room roster, kickoff prompt, and transcript (tested).
 - `src/schedule.rs` — schedule repeats and next-run times (tested).
 - `src/usage.rs` — plan-usage guard: throttle and pause thresholds (tested).

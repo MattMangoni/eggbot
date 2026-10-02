@@ -207,7 +207,7 @@ impl Eggbot {
                 .px_2()
                 .rounded(px(8.))
                 .cursor_pointer()
-                .when(self.open_room.is_some() || i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
+                .when(self.open_room.is_some() || self.open_group.is_some() || i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
                 .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
                 // drag a row onto another to reorder
                 .on_drag(DraggedBot { ix: i, name: b.name.clone().into(), color: b.color(), p }, move |d, _, _, cx| {
@@ -313,7 +313,7 @@ impl Eggbot {
                     .flex_col()
                     .px_2()
                     .pt_1()
-                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(self.open_room.is_none() && !self.bots.is_empty(), |d| d.child(highlight)).children(rows))
+                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(self.open_room.is_none() && self.open_group.is_none() && !self.bots.is_empty(), |d| d.child(highlight)).children(rows))
                     // the space below the last bot: drop here to move a bot to the end
                     .child(
                         div()
@@ -327,6 +327,7 @@ impl Eggbot {
                     ),
             )
             .child(self.rooms_nav(cx))
+            .child(self.groups_nav(cx))
             .children(self.meters.iter().map(|m| self.usage_meter(m)))
             .child(div().h_3())
             .child(handle)
@@ -398,6 +399,73 @@ impl Eggbot {
                     ),
             )
             .child(div().id("room-list").max_h(px(160.)).overflow_y_scroll().flex().flex_col().px_2().pb_1().children(rows))
+    }
+
+    /// Groups sit under rooms. A group shares notes; it has no transcript and no facilitator.
+    fn groups_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.p;
+        let rows = self.groups.iter().map(|g| {
+            let id = g.id;
+            let on = self.open_group == Some(id);
+            let names: Vec<String> = g.members.iter().filter_map(|bid| self.bots.iter().find(|b| b.id == *bid).map(|b| b.name.clone())).collect();
+            let subtitle = match names.as_slice() {
+                [] => "No bots yet".to_string(),
+                [one] => one.clone(),
+                [first, rest @ ..] => format!("{first} + {}", rest.len()),
+            };
+            div()
+                .id(("group", id))
+                .h(px(36.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.tint))
+                .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+                .on_click(cx.listener(move |this, _, window, cx| this.show_group(id, window, cx)))
+                .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().child(div().size(px(8.)).rounded_full().border_1().border_color(if on { p.ink } else { p.muted })))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .overflow_hidden()
+                        .child(div().text_sm().text_color(p.ink).truncate().child(g.title.clone()))
+                        .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
+                )
+        });
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .border_t_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .pl_4()
+                    .pr_2()
+                    .child(div().flex_1().text_xs().text_color(p.muted).child("Groups"))
+                    .child(
+                        div()
+                            .id("new-group")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .text_color(p.muted)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.hover).text_color(p.ink))
+                            .on_click(cx.listener(|this, _, window, cx| this.new_group(window, cx)))
+                            .child(Icon::new(IconName::Plus).size_4()),
+                    ),
+            )
+            .child(div().id("group-list").max_h(px(120.)).overflow_y_scroll().flex().flex_col().px_2().pb_1().children(rows))
     }
 
     fn usage_meter(&self, meter: &Meter) -> impl IntoElement {
@@ -604,6 +672,9 @@ impl Eggbot {
         }
         if self.open_room.is_some() {
             return self.room_view(cx);
+        }
+        if self.open_group.is_some() {
+            return self.group_view(cx);
         }
         let Some(bot) = self.bots.get(self.selected) else {
             return main
@@ -1269,6 +1340,102 @@ impl Eggbot {
             )
             .child(body)
             .into_any_element()
+    }
+
+    /// Title and members. Notes are shared; nothing here is a transcript.
+    fn group_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.p;
+        let Some(id) = self.open_group else { return div().flex_1().into_any_element() };
+        let Some(title) = self.groups.iter().find(|g| g.id == id).map(|g| g.title.clone()) else {
+            return div().flex_1().into_any_element();
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(p.bg)
+            .child(
+                div()
+                    .h(px(44.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .when(!self.sidebar_open, |d| d.pl(px(TRAFFIC_INSET)))
+                    .border_b_1()
+                    .border_color(p.line)
+                    .child(div().text_sm().text_color(p.muted).child("Groups"))
+                    .child(div().text_sm().text_color(p.muted).child("/"))
+                    .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(title)),
+            )
+            .when(self.settings_open, |d| d.child(self.settings(cx)))
+            .child(div().id("group-body").flex_1().overflow_y_scroll().child(self.group_setup(cx)))
+            .into_any_element()
+    }
+
+    fn group_setup(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.p;
+        let Some(group_id) = self.open_group else { return div().into_any_element() };
+        let Some(members) = self.groups.iter().find(|g| g.id == group_id).map(|g| g.members.clone()) else {
+            return div().into_any_element();
+        };
+        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
+        let roster: Vec<_> = self.bots.iter().map(|b| {
+            let (bot_id, on) = (b.id, members.contains(&b.id));
+            div()
+                .id(("group-member", bot_id))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_1()
+                .py_1()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|d| d.bg(p.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_group_member(group_id, bot_id, cx)))
+                .child(div().size(px(16.)).flex_none().rounded(px(4.)).border_1().border_color(if on { p.ink } else { p.line }).when(on, |d| d.bg(p.ink)))
+                .child(egg(format!("group-{bot_id}"), hex(b.color()), 14., b.mood()))
+                .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
+                .child(
+                    div()
+                        .id(("group-open", bot_id))
+                        .text_xs()
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(p.ink))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.open_bot(bot_id, window, cx);
+                        }))
+                        .child("Open"),
+                )
+        }).collect();
+        let confirming = self.confirm_delete_group == Some(group_id);
+        div().px_6().pb_8().child(
+            self.panel()
+                .child(div().flex().flex_col().gap_1().child(label("Name")).child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.group_title).appearance(false))))
+                .child(div().text_xs().text_color(p.muted).child("Bots here share one notes file. Private notes and skills stay on each bot. There is no lead, and this is not a room."))
+                .child(div().h(px(1.)).bg(p.line))
+                .child(label("Bots"))
+                .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
+                .children(roster)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pt_1()
+                        .child(div().flex_1())
+                        .child(
+                            button("delete-group", p)
+                                .on_click(cx.listener(move |this, _, _, cx| this.delete_group(group_id, cx)))
+                                .child(if confirming { "Delete group?" } else { "Delete" }),
+                        ),
+                ),
+        ).into_any_element()
     }
 
     /// Settings (⌘,): start at login, and instructions every bot gets.
