@@ -719,7 +719,7 @@ impl Eggbot {
             Panel::Skills => Some(self.skills(bot, cx).into_any_element()),
         };
 
-        let body = if bot.msgs.is_empty() {
+        let body = if bot.msgs.is_empty() && !bot.queue.iter().any(|q| q.typed) {
             div()
                 .flex_1()
                 .flex()
@@ -1727,7 +1727,7 @@ impl Eggbot {
             .child(div().child(label).with_animation("pulse", Animation::new(Duration::from_millis(1600)).repeat(), |d, t| d.opacity(0.45 + 0.55 * (t * std::f32::consts::TAU).cos().abs())))
     }
 
-    /// A message waiting on the bot's queue ; × drops it. It becomes a normal bubble when its turn starts.
+    /// A message waiting on the bot's queue (busy or throttled); × drops it. It becomes a normal bubble when its turn starts.
     fn queued(&self, bot: &Bot, at: usize, text: &str, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let note = if bot.busy() { "Queued · sends after this turn" } else { "Queued" };

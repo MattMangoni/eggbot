@@ -1210,20 +1210,15 @@ impl Eggbot {
             return;
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        if busy {
+        // busy, or throttled behind another bot: the message waits on the persisted queue
+        if busy || !self.may_start(provider) {
             self.deliver(id, handoff::Pending::typed(text), cx);
             return;
         }
         if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
             bot.msgs.push(Msg::User(text.clone()));
         }
-        let pending = handoff::Pending::user(text);
-        // throttled and another bot is running: the message waits on the persisted queue
-        if !self.may_start(provider) {
-            self.deliver(id, pending, cx);
-            return;
-        }
-        self.start_turn(id, pending, cx);
+        self.start_turn(id, handoff::Pending::user(text), cx);
     }
 
     /// Drops one message the user queued. `at` indexes the bot's whole queue; other kinds of queued work stay.
