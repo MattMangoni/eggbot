@@ -1200,16 +1200,20 @@ impl Eggbot {
         self.sync_draft(window, cx);
         let text = self.input.read(cx).value().trim().to_string();
         let Some(bot) = self.bots.get(self.selected) else { return };
-        if text.is_empty() || bot.busy() {
+        if text.is_empty() {
             return;
         }
-        let (id, provider) = (bot.id, bot.provider);
+        let (id, provider, busy) = (bot.id, bot.provider, bot.busy());
         // a paused send stays in the box, so a window that resets overnight does not fire a draft
         if self.breach_of(provider).is_some_and(|b| b.level == usage::Level::Pause) {
             cx.notify();
             return;
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
+        if busy {
+            self.deliver(id, handoff::Pending::typed(text), cx);
+            return;
+        }
         if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
             bot.msgs.push(Msg::User(text.clone()));
         }
@@ -1223,7 +1227,7 @@ impl Eggbot {
     }
 
     /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
-    fn start_turn(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
+    fn start_turn(&mut self, id: usize, mut pending: handoff::Pending, cx: &mut Context<Self>) {
         let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };
         let busy = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy());
         // never drop a hop: if the guard closed, put it back at the front of the saved queue
@@ -1265,6 +1269,10 @@ impl Eggbot {
         bot.stopped = false;
         bot.hops = hops;
         bot.fresh_turn = fresh;
+        // cleared so a sign-in retry of this turn does not add the bubble twice
+        if std::mem::take(&mut pending.typed) {
+            bot.msgs.push(Msg::User(pending.prompt.clone()));
+        }
         bot.reply_from = bot.msgs.len();
         bot.current = Some(pending);
         // notes stay in /memory; scratch is /work only when the user has mounted nothing

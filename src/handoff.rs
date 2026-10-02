@@ -21,19 +21,26 @@ pub struct Pending {
     /// Room this hop belongs to. Kept on the queue so a quit resumes the same transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<usize>,
+    /// Typed while the bot was working. Its chat bubble is added when the turn starts, not mid-reply.
+    #[serde(default)]
+    pub typed: bool,
 }
 
 impl Pending {
     pub fn user(prompt: String) -> Self {
-        Self { prompt, hops: 0, fresh: false, handoff: false, room: None }
+        Self { prompt, hops: 0, fresh: false, handoff: false, room: None, typed: false }
+    }
+
+    pub fn typed(prompt: String) -> Self {
+        Self { typed: true, ..Self::user(prompt) }
     }
 
     pub fn handoff(prompt: String, hops: u32) -> Self {
-        Self { prompt, hops, fresh: false, handoff: true, room: None }
+        Self { prompt, hops, fresh: false, handoff: true, room: None, typed: false }
     }
 
     pub fn schedule(prompt: String) -> Self {
-        Self { prompt, hops: 0, fresh: true, handoff: false, room: None }
+        Self { prompt, hops: 0, fresh: true, handoff: false, room: None, typed: false }
     }
 
     /// This hop must be restarted after a quit or crash. User turns and schedules stay stopped.
@@ -243,8 +250,12 @@ mod tests {
         // fields added later still load
         let old = r#"{"prompt":"ship it","hops":2}"#;
         let loaded = serde_json::from_str::<Pending>(old).unwrap();
-        assert!(!loaded.fresh && !loaded.handoff);
+        assert!(!loaded.fresh && !loaded.handoff && !loaded.typed);
         assert!(loaded.room.is_none());
+        let typed = Pending::typed("and then this".into());
+        let again = serde_json::from_str::<Pending>(&serde_json::to_string(&typed).unwrap()).unwrap();
+        assert!(again.typed && !again.inflight());
+        assert_eq!(restore(Some(typed), vec![]), vec![]);
         let mut room_turn = Pending::handoff("go".into(), 0);
         room_turn.room = Some(3);
         let kept = serde_json::from_str::<Pending>(&serde_json::to_string(&room_turn).unwrap()).unwrap();
