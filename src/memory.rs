@@ -2,6 +2,7 @@
 //!
 //! The file is the store. Each turn's role includes a capped copy, and a reply may
 //! end with an `<eggbot-learn>` block that eggbot merges in and does not show.
+//! A `group` or `shared` prefix on a bullet targets a group's notes instead (`group.rs`).
 
 /// Bullets kept per section. Older ones fall off the end.
 const MAX_BULLETS: usize = 16; // ponytail: 16 bullets a section, raise the cap or summarize when a bot needs a longer memory
@@ -24,6 +25,9 @@ pub enum Kind {
 pub struct Update {
     pub kind: Kind,
     pub text: String,
+    /// None writes this bot's private notes. Some(name) writes a group's notes:
+    /// an empty name means the only group this bot is in.
+    pub group: Option<String>,
 }
 
 /// Pulls learn-blocks out of a reply. The visible text is what the user and the next bot see.
@@ -85,10 +89,30 @@ pub fn context(notes: &str) -> String {
         return format!("\n\n{RULE}\n");
     }
     // trailing newline so the folders note, which starts with a space, stays on its own line
-    format!(
-        "\n\n{RULE}\n\nCurrent notes:\n{}\n",
-        excerpt(&neutralize(notes))
-    )
+    format!("\n\n{RULE}\n\nCurrent notes:\n{}\n", capped(notes, "/memory/NOTES.md"))
+}
+
+/// Merges `updates` into the notes file at `path`, creating parent directories.
+/// No updates leaves the disk alone, including a missing file.
+pub fn save(path: &std::path::Path, updates: &[Update]) -> std::io::Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let merged = learn(&existing, updates);
+    if merged == existing {
+        return Ok(());
+    }
+    if merged.trim().is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    }
+    std::fs::write(path, merged)
 }
 
 const RULE: &str = "\
@@ -128,18 +152,38 @@ fn parse_update(line: &str) -> Option<Update> {
     if rest.is_empty() {
         return None;
     }
-    let (kind, text) = match rest.split_once(':') {
-        Some((k, t)) => match kind_of(k) {
-            Some(kind) => (kind, t.trim()),
-            None => (Kind::Lesson, rest),
-        },
-        None => (Kind::Lesson, rest),
+    let (group, kind, text) = match rest.split_once(':') {
+        Some((label, text)) => split_label(label.trim(), text.trim(), rest),
+        None => (None, Kind::Lesson, rest),
     };
     let text = clip(text);
     if text.is_empty() || placeholder(&text) {
         return None;
     }
-    Some(Update { kind, text })
+    Some(Update { kind, text, group })
+}
+
+/// `group` / `shared` at the start of the label targets a group. The last word is the kind
+/// when it is one; the words between are the group title. Anything else stays private.
+fn split_label<'a>(label: &str, text: &'a str, rest: &'a str) -> (Option<String>, Kind, &'a str) {
+    let words: Vec<&str> = label.split_whitespace().collect();
+    let targeted = words.first().is_some_and(|word| {
+        let word = word.to_ascii_lowercase();
+        matches!(word.as_str(), "group" | "shared")
+    });
+    if !targeted {
+        return match kind_of(label) {
+            Some(kind) => (None, kind, text),
+            None => (None, Kind::Lesson, rest),
+        };
+    }
+    let tail = &words[1..];
+    if let Some((last, name)) = tail.split_last()
+        && let Some(kind) = kind_of(last)
+    {
+        return (Some(name.join(" ")), kind, text);
+    }
+    (Some(tail.join(" ")), Kind::Lesson, text)
 }
 
 fn kind_of(label: &str) -> Option<Kind> {
@@ -326,9 +370,11 @@ fn tidy(text: &str) -> String {
     out.trim().to_string()
 }
 
-fn excerpt(notes: &str) -> String {
-    if notes.chars().count() <= MAX_INJECT {
-        return notes.to_string();
+/// Capped copy of a notes file. `where_rest` is named when the file is cut.
+pub fn capped(notes: &str, where_rest: &str) -> String {
+    let notes = neutralize(notes.trim());
+    if notes.is_empty() || notes.chars().count() <= MAX_INJECT {
+        return notes;
     }
     let cut = notes
         .char_indices()
@@ -340,13 +386,13 @@ fn excerpt(notes: &str) -> String {
         .filter(|i| *i > MAX_INJECT / 2)
         .unwrap_or(cut);
     format!(
-        "{}\n… (older notes omitted; the rest is in /memory/NOTES.md)",
+        "{}\n… (older notes omitted; the rest is in {where_rest})",
         notes[..cut].trim_end()
     )
 }
 
 /// A note must not be able to close Codex's `<eggbot-context>` wrapper.
-fn neutralize(notes: &str) -> String {
+pub(crate) fn neutralize(notes: &str) -> String {
     notes
         .replace("<eggbot-context>", "<eggbot-context >")
         .replace("</eggbot-context>", "</eggbot-context >")
@@ -357,10 +403,7 @@ mod tests {
     use super::*;
 
     fn upd(kind: Kind, text: &str) -> Update {
-        Update {
-            kind,
-            text: text.into(),
-        }
+        Update { kind, text: text.into(), group: None }
     }
 
     #[test]
@@ -506,6 +549,36 @@ mod tests {
         let notes = format!("## Facts\n{}", "- a line of notes\n".repeat(400));
         let text = context(&notes);
         assert!(text.contains("older notes omitted"));
+        assert!(text.contains("/memory/NOTES.md"));
         assert!(text.chars().count() < MAX_INJECT + RULE.chars().count() + 80);
+    }
+
+    #[test]
+    fn a_group_prefix_is_a_target_and_the_block_still_hides() {
+        let (visible, updates) = extract("Done.\n<eggbot-learn>\n- group preference: reply in Italian\n- shared Reviewers fact: uses OrbStack\n- group Code Reviewers lesson: check tests\n- preference: terse\n- group fact: …\n</eggbot-learn>\n");
+        assert_eq!(visible, "Done.");
+        assert_eq!(
+            updates,
+            vec![
+                Update { kind: Kind::Preference, text: "reply in Italian".into(), group: Some(String::new()) },
+                Update { kind: Kind::Fact, text: "uses OrbStack".into(), group: Some("Reviewers".into()) },
+                Update { kind: Kind::Lesson, text: "check tests".into(), group: Some("Code Reviewers".into()) },
+                upd(Kind::Preference, "terse"),
+            ]
+        );
+    }
+
+    #[test]
+    fn save_round_trips_and_skips_an_empty_update_list() {
+        let dir = std::env::temp_dir().join(format!("eggbot-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("NOTES.md");
+        save(&path, &[]).unwrap();
+        assert!(!path.exists());
+        save(&path, &[upd(Kind::Preference, "reply in Italian")]).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("reply in Italian"));
+        save(&path, &[upd(Kind::Forget, "reply in Italian")]).unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
