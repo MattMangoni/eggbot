@@ -682,7 +682,7 @@ impl Eggbot {
         let p = self.p;
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().bg(p.bg);
         if let Some(setup) = &self.setup {
-            return main.child(div().h(px(44.)).flex_none()).child(self.setup_view(setup, cx)).into_any_element();
+            return main.child(div().h(px(44.)).flex_none()).when(self.panel == Panel::Settings, |d| d.child(self.settings(cx))).child(self.setup_view(setup, cx)).into_any_element();
         }
         if self.open_room.is_some() {
             return self.room_view(cx);
@@ -690,9 +690,11 @@ impl Eggbot {
         if self.open_group.is_some() {
             return self.group_view(cx);
         }
+        let settings = (self.panel == Panel::Settings).then(|| self.settings(cx).into_any_element());
         let Some(bot) = self.bots.get(self.selected) else {
             return main
                 .child(div().h(px(44.)).flex_none())
+                .children(settings)
                 .child(
                     div()
                         .flex_1()
@@ -710,7 +712,7 @@ impl Eggbot {
 
         let panels = match self.panel {
             Panel::None => None,
-            Panel::Settings => Some(self.settings(cx).into_any_element()),
+            Panel::Settings => settings,
             Panel::Editor => Some(self.editor(bot, cx).into_any_element()),
             Panel::Schedules => Some(self.schedules(bot, cx).into_any_element()),
             Panel::Skills => Some(self.skills(bot, cx).into_any_element()),
@@ -1920,7 +1922,13 @@ impl Render for Eggbot {
             )
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_quit(window, cx)))
             .on_action(cx.listener(|this, _: &NewBot, _, cx| {
-                this.menu_open = !this.menu_open;
+                // the hatch menu lives in the sidebar
+                if !this.sidebar_open {
+                    this.toggle_sidebar(cx);
+                    this.menu_open = true;
+                } else {
+                    this.menu_open = !this.menu_open;
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FocusInput, window, cx| this.focus_main(window, cx)))
