@@ -2371,6 +2371,8 @@ fn set_dock_icon(visible: bool) {
 #[cfg(test)]
 mod persist_tests {
     use super::*;
+    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
+    use core::prelude::v1::test;
 
     #[test]
     fn handoff_queue_loads_from_state_json() {

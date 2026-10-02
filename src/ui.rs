@@ -1107,7 +1107,7 @@ impl Eggbot {
             .when(!reading && started, |d| {
                 d.child(div().px_6().pt_8().text_sm().text_color(p.muted).child("This room already started. New replies show up here; earlier ones stay in each bot's chat."))
             })
-            .child(div().when(reading, |d| d.flex_none().max_h(px(320.)).overflow_y_scroll()).when(!reading, |d| d.id("room-body").flex_1().overflow_y_scroll()).child(setup))
+            .child(div().id("room-body").overflow_y_scroll().when(reading, |d| d.flex_none().max_h(px(320.))).when(!reading, |d| d.flex_1()).child(setup))
             .into_any_element()
     }
 
