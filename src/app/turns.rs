@@ -1,5 +1,6 @@
 //! One turn of a bot: sending, starting it with its role text, streaming its events, and finishing it (notes, quiet runs, alerts).
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::*;
@@ -8,6 +9,7 @@ use super::Eggbot;
 use super::bot::{Bot, Msg, reply_text};
 use super::state::{SHARED, data_dir};
 use crate::claude::Provider;
+use crate::memory::Update;
 use crate::{claude, codex, group, handoff, memory, room, sandbox, skills, usage};
 
 const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md with short bullets worth keeping (Facts, Preferences, Lessons — no chat logs), or end with one <eggbot-learn> block. Then reply with one short line.";
@@ -231,17 +233,15 @@ impl Eggbot {
                 // hide the learn block before the transcript, handoff, quiet-check, or alert
                 let reply = if ok { keep_notes(bot, &groups, &rooms, &reply, start) } else { reply };
                 // a scheduled run with nothing to say stays out of the way
-                let quiet = ok && fresh_turn && reply.trim().trim_end_matches('.') == "QUIET";
+                let quiet = ok && fresh_turn && is_quiet(&reply);
                 if quiet {
-                    let tail = bot.msgs.split_off(start);
-                    bot.msgs.extend(tail.into_iter().filter(|m| !matches!(m, Msg::Bot(_))));
-                    bot.msgs.push(Msg::Divider("Nothing to report".into()));
+                    drop_quiet_reply(&mut bot.msgs, start);
                 }
                 let (name, color) = (bot.name.clone(), bot.color());
                 // engine down: keep the hop queued instead of starting it into the same failure
                 let engine_down = failed.as_deref().is_some_and(sandbox::engine_down);
-                if engine_down && let Some(turn) = finished.filter(handoff::Pending::inflight) {
-                    bot.queue.insert(0, turn);
+                if engine_down {
+                    bot.queue = handoff::restore(finished, std::mem::take(&mut bot.queue));
                 }
                 let provider = bot.provider;
                 let refreshed = std::mem::take(&mut bot.refreshing);
@@ -326,54 +326,66 @@ impl Eggbot {
     }
 }
 
-/// Merges an `<eggbot-learn>` block into NOTES.md and returns the reply without that block.
+/// Merges an `<eggbot-learn>` block into the notes files and returns the reply without that block.
 /// `start` is `reply_from`, so only this turn's bubbles change.
-/// `groups` are `(id, title)` for groups this bot is in. A group bullet is saved on that group, not privately.
-/// `rooms` are `(id, title)` for rooms this bot is in. A room bullet is saved on that room, not privately.
 fn keep_notes(bot: &mut Bot, groups: &[(usize, String)], rooms: &[(usize, String)], reply: &str, start: usize) -> String {
     let (visible, updates) = memory::extract(reply);
     if visible != reply {
-        // the block can span streamed chunks, so one visible reply replaces them
-        let mut kept = false;
-        let mut i = start.min(bot.msgs.len());
-        while i < bot.msgs.len() {
-            if matches!(bot.msgs[i], Msg::Bot(_)) {
-                if !kept && !visible.is_empty() {
-                    bot.msgs[i] = Msg::Bot(visible.clone());
-                    kept = true;
-                    i += 1;
-                } else {
-                    bot.msgs.remove(i);
-                }
-            } else {
-                i += 1;
-            }
-        }
+        show_visible(&mut bot.msgs, start, &visible);
     }
-    if updates.is_empty() {
-        return visible;
-    }
-    let room_titles: Vec<&str> = rooms.iter().map(|(_, title)| title.as_str()).collect();
-    let routed_rooms = room::route(&updates, &room_titles);
-    let titles: Vec<&str> = groups.iter().map(|(_, title)| title.as_str()).collect();
-    let routed = group::route(&routed_rooms.rest, &titles);
-    let private_path = data_dir().join("bots").join(bot.id.to_string()).join("memory").join("NOTES.md");
-    if let Err(e) = memory::save(&private_path, &routed.private) {
-        eprintln!("eggbot: could not save notes: {e}");
-    }
-    for (index, updates) in &routed.shared {
-        let path = group::notes_file(&data_dir(), groups[*index].0);
-        if let Err(e) = memory::save(&path, updates) {
-            eprintln!("eggbot: could not save group notes: {e}");
-        }
-    }
-    for (index, updates) in &routed_rooms.memory {
-        let path = room::notes_file(&data_dir(), rooms[*index].0);
-        if let Err(e) = memory::save(&path, updates) {
-            eprintln!("eggbot: could not save room memory: {e}");
+    for (path, updates) in note_files(&data_dir(), bot.id, groups, rooms, &updates) {
+        if let Err(e) = memory::save(&path, &updates) {
+            eprintln!("eggbot: could not save {}: {e}", path.display());
         }
     }
     visible
+}
+
+/// Replaces this turn's bot bubbles (from `start`) with one `visible` bubble; the learn block can span streamed chunks.
+fn show_visible(msgs: &mut Vec<Msg>, start: usize, visible: &str) {
+    let mut kept = false;
+    let mut i = start.min(msgs.len());
+    while i < msgs.len() {
+        if matches!(msgs[i], Msg::Bot(_)) {
+            if !kept && !visible.is_empty() {
+                msgs[i] = Msg::Bot(visible.to_string());
+                kept = true;
+                i += 1;
+            } else {
+                msgs.remove(i);
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Which notes file each learned bullet goes to: private first, then each group, then each room.
+/// `groups` and `rooms` are `(id, title)` for the ones this bot is in now; a bullet for any other is dropped.
+fn note_files(root: &Path, bot: usize, groups: &[(usize, String)], rooms: &[(usize, String)], updates: &[Update]) -> Vec<(PathBuf, Vec<Update>)> {
+    let room_titles: Vec<&str> = rooms.iter().map(|(_, title)| title.as_str()).collect();
+    let routed_rooms = room::route(updates, &room_titles);
+    let group_titles: Vec<&str> = groups.iter().map(|(_, title)| title.as_str()).collect();
+    let routed = group::route(&routed_rooms.rest, &group_titles);
+    let mut files = vec![];
+    if !routed.private.is_empty() {
+        files.push((root.join("bots").join(bot.to_string()).join("memory").join("NOTES.md"), routed.private));
+    }
+    files.extend(routed.shared.into_iter().map(|(i, u)| (group::notes_file(root, groups[i].0), u)));
+    files.extend(routed_rooms.memory.into_iter().map(|(i, u)| (room::notes_file(root, rooms[i].0), u)));
+    files
+}
+
+/// A scheduled run may answer QUIET when nothing needs the user.
+fn is_quiet(reply: &str) -> bool {
+    reply.trim().trim_end_matches('.') == "QUIET"
+}
+
+/// Removes this turn's reply bubbles and marks the quiet run with a divider; tool lines stay.
+fn drop_quiet_reply(msgs: &mut Vec<Msg>, start: usize) {
+    let tail = msgs.split_off(start.min(msgs.len()));
+    msgs.extend(tail.into_iter().filter(|m| !matches!(m, Msg::Bot(_))));
+    msgs.push(Msg::Divider("Nothing to report".into()));
 }
 
 #[cfg(test)]
@@ -412,5 +424,54 @@ mod tests {
         assert!(skill_at < roster_at && roster_at < notes_at && notes_at < folders_at);
         assert!(got.contains("In room \"Standup\""));
         assert!(got.ends_with("SHARED"));
+    }
+
+    fn kinds(msgs: &[Msg]) -> Vec<String> {
+        msgs.iter()
+            .map(|m| match m {
+                Msg::Bot(t) => format!("bot:{t}"),
+                Msg::User(t) => format!("user:{t}"),
+                Msg::Divider(t) => format!("divider:{t}"),
+                Msg::Tool { .. } => "tool".into(),
+                _ => "other".into(),
+            })
+            .collect()
+    }
+
+    fn tool() -> Msg {
+        Msg::Tool { id: "t1".into(), verb: "Read".into(), target: "a.rs".into(), detail: String::new(), open: false }
+    }
+
+    #[test]
+    fn only_this_turns_bubbles_become_the_visible_reply() {
+        let mut msgs = vec![Msg::Bot("earlier".into()), Msg::User("hi".into()), Msg::Bot("Done.\n<eggbot-".into()), tool(), Msg::Bot("learn>- fact: x</eggbot-learn>".into())];
+        show_visible(&mut msgs, 2, "Done.");
+        assert_eq!(kinds(&msgs), ["bot:earlier", "user:hi", "bot:Done.", "tool"]);
+        // a reply that was only the block leaves no empty bubble
+        show_visible(&mut msgs, 2, "");
+        assert_eq!(kinds(&msgs), ["bot:earlier", "user:hi", "tool"]);
+    }
+
+    #[test]
+    fn learned_bullets_go_to_the_private_group_or_room_file() {
+        let (_, updates) = memory::extract("ok\n<eggbot-learn>\n- fact: mine\n- group fact: ours\n- room fact: at nine\n- room Other fact: dropped\n</eggbot-learn>");
+        let files = note_files(Path::new("/support"), 3, &[(5, "Reviewers".into())], &[(8, "Standup".into())], &updates);
+        let got: Vec<(String, Vec<&str>)> = files.iter().map(|(p, u)| (p.display().to_string(), u.iter().map(|u| u.text.as_str()).collect())).collect();
+        let want = [("/support/bots/3/memory/NOTES.md", "mine"), ("/support/groups/5/NOTES.md", "ours"), ("/support/rooms/8/NOTES.md", "at nine")];
+        assert_eq!(got, want.map(|(p, t)| (p.to_string(), vec![t])));
+        // no group or room membership: their bullets are dropped, not saved privately
+        let alone = note_files(Path::new("/support"), 3, &[], &[], &updates);
+        assert_eq!(alone.len(), 1);
+        assert_eq!(alone[0].1.len(), 1);
+        assert!(note_files(Path::new("/support"), 3, &[], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_quiet_run_keeps_its_tool_lines_and_says_nothing_to_report() {
+        assert!(is_quiet(" QUIET.\n") && is_quiet("QUIET"));
+        assert!(!is_quiet("Quiet day, but the build broke."));
+        let mut msgs = vec![Msg::Bot("earlier".into()), tool(), Msg::Bot("QUIET".into())];
+        drop_quiet_reply(&mut msgs, 1);
+        assert_eq!(kinds(&msgs), ["bot:earlier", "tool", "divider:Nothing to report"]);
     }
 }
