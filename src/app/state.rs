@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use super::Eggbot;
 use super::bot::Bot;
 use crate::claude::Meter;
-use crate::{Appearance, group, room, usage};
+use crate::ui::theme::Appearance;
+use crate::{group, room, usage};
 
 /// "Instructions for all bots" until the user edits them in Settings.
 pub(crate) const SHARED: &str = "Reply in concise GitHub-flavored markdown.";

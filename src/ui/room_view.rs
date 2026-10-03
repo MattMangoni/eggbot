@@ -11,7 +11,8 @@ use gpui_kit::*;
 use super::{READ_W, TRAFFIC_INSET, button, primary};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
-use crate::{handoff, hex};
+use crate::handoff;
+use crate::ui::theme::hex;
 
 impl Eggbot {
     /// The room's transcript, then the roster. Start still talks to the facilitator only.

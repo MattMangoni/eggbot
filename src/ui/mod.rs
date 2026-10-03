@@ -4,7 +4,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app::{Eggbot, Panel};
-use crate::{Appearance, CloseWindow, CycleAppearance, Dismiss, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, Palette, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar, set_dock_icon};
+use crate::ui::theme::{Appearance, Palette};
+use crate::{CloseWindow, CycleAppearance, Dismiss, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar, set_dock_icon};
 
 mod chat;
 mod composer;
@@ -12,6 +13,7 @@ mod group_view;
 mod panels;
 mod room_view;
 mod sidebar;
+pub(crate) mod theme;
 mod topbar;
 
 const READ_W: f32 = 720.;

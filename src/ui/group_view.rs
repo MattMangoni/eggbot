@@ -10,7 +10,7 @@ use gpui_kit::*;
 use super::{TRAFFIC_INSET, button};
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
-use crate::hex;
+use crate::ui::theme::hex;
 
 impl Eggbot {
     /// Title, members, and their shared notes (read-only). Nothing here is a transcript.

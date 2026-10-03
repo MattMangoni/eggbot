@@ -13,8 +13,9 @@ use crate::app::bot::{Bot, SHELLS};
 use crate::app::setup::{Check, Setup};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
+use crate::ui::theme::hex;
 use crate::usage;
-use crate::{hex, login, sandbox};
+use crate::{login, sandbox};
 
 impl Eggbot {
     /// The first-run checklist: each row turns green on its own as the checks pass.

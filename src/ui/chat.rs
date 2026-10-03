@@ -13,7 +13,8 @@ use crate::app::bot::{Bot, Msg};
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::egg::{Mood, egg};
-use crate::{handoff, hex};
+use crate::handoff;
+use crate::ui::theme::hex;
 
 impl Eggbot {
     pub(crate) fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {

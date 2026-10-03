@@ -14,7 +14,7 @@ use super::{TRAFFIC_INSET, bar, button};
 use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
-use crate::hex;
+use crate::ui::theme::hex;
 
 impl Eggbot {
     /// The top-bar folders button: "Add folder" with none, else the folder name or count, opening a list to remove or add.

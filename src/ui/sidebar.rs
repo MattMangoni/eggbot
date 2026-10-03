@@ -13,8 +13,8 @@ use crate::app::Eggbot;
 use crate::app::bot::PRESETS;
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
+use crate::ui::theme::{Palette, hex};
 use crate::usage;
-use crate::{Palette, hex};
 
 const ROW_H: f32 = 48.;
 const ROW_GAP: f32 = 2.;
