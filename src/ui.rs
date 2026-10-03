@@ -1310,7 +1310,7 @@ impl Eggbot {
                                 .on_click(cx.listener(move |this, _, window, cx| this.open_bot(to, window, cx)))
                                 .child(format!("Kickoff · {name}")),
                         )
-                        .child(div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(text.clone())),
+                        .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(text.clone())),
                 )
             }
             crate::room::Event::Reply { bot, name, color, text } => {
@@ -1475,7 +1475,7 @@ impl Eggbot {
                 .child(div().h(px(1.)).bg(p.line))
                 .child(label("Bots"))
                 .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
-                .child(div().flex().flex_col().gap_1().children(roster))
+                .children(roster)
                 .child(
                     div()
                         .flex()
