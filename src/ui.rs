@@ -846,8 +846,8 @@ impl Eggbot {
                 .border_color(p.line)
                 .text_xs()
                 .text_color(color)
-                .child(Icon::new(IconName::CircleAlert).size_3p5())
-                .child(text)
+                .child(Icon::new(IconName::CircleAlert).size_3p5().flex_none())
+                .child(div().flex_1().min_w_0().child(text))
         });
 
         div()
@@ -1907,12 +1907,12 @@ impl Eggbot {
                 .gap_2()
                 .text_sm()
                 .text_color(p.err)
-                .child(Icon::new(IconName::CircleAlert).size_4())
-                .child(t.clone())
-                .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
+                .child(Icon::new(IconName::CircleAlert).size_4().flex_none())
+                .child(div().min_w_0().child(t.clone()))
+                .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().flex_none().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
                 .when(t.contains("/login") || t.contains("codex login"), |d| {
                     let codex = t.contains("codex login");
-                    d.child(button(("sign-in", i), p).ml_2().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
+                    d.child(button(("sign-in", i), p).ml_2().flex_none().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
                 }),
             Msg::Tool { verb, target, detail, open, .. } => {
                 let (id, open) = (bot.id, *open);
@@ -1937,9 +1937,9 @@ impl Eggbot {
                                 }
                                 cx.notify();
                             }))
-                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3())
-                            .child(verb.clone())
-                            .child(div().truncate().font_family("Menlo").child(target.clone())),
+                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3().flex_none())
+                            .child(div().flex_none().child(verb.clone()))
+                            .child(div().min_w_0().truncate().font_family("Menlo").child(target.clone())),
                     )
                     .when(open, |d| d.child(div().ml_5().p_3().rounded(px(8.)).bg(p.bubble).text_xs().font_family("Menlo").text_color(p.muted).whitespace_normal().child(detail)))
             }
