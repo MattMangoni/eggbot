@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 
 /// One instruction pack. `name` is the heading the bot sees; `body` is the procedure.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Skill {
-    pub name: String,
-    pub body: String,
+pub(crate) struct Skill {
+    pub(crate) name: String,
+    pub(crate) body: String,
 }
 
-pub const MAX_SKILLS: usize = 12;
-pub const MAX_NAME: usize = 48;
-pub const MAX_BODY: usize = 4000;
+const MAX_SKILLS: usize = 12;
+const MAX_NAME: usize = 48;
+const MAX_BODY: usize = 4000;
 
 /// Starting skills for a preset, matched by name so reordering presets cannot mix them.
 /// Custom, and any other name, starts empty.
-pub fn defaults(preset: &str) -> Vec<Skill> {
+pub(crate) fn defaults(preset: &str) -> Vec<Skill> {
     match preset {
         "Reviewer" => vec![
             skill(
@@ -50,7 +50,7 @@ pub fn defaults(preset: &str) -> Vec<Skill> {
 }
 
 /// Adds a skill, or replaces `replacing`. The list is unchanged when this returns an error.
-pub fn upsert(skills: &mut Vec<Skill>, replacing: Option<usize>, name: &str, body: &str) -> Result<(), &'static str> {
+pub(crate) fn upsert(skills: &mut Vec<Skill>, replacing: Option<usize>, name: &str, body: &str) -> Result<(), &'static str> {
     if let Some(i) = replacing {
         if i >= skills.len() {
             return Err("That skill is gone");
@@ -66,7 +66,7 @@ pub fn upsert(skills: &mut Vec<Skill>, replacing: Option<usize>, name: &str, bod
     Ok(())
 }
 
-pub fn remove(skills: &mut Vec<Skill>, index: usize) -> bool {
+pub(crate) fn remove(skills: &mut Vec<Skill>, index: usize) -> bool {
     if index < skills.len() {
         skills.remove(index);
         true
@@ -76,7 +76,7 @@ pub fn remove(skills: &mut Vec<Skill>, index: usize) -> bool {
 }
 
 /// Text inserted after the bot's role. Empty when there are no skills, so the role string stays as it was.
-pub fn section(skills: &[Skill]) -> String {
+pub(crate) fn section(skills: &[Skill]) -> String {
     if skills.is_empty() {
         return String::new();
     }
@@ -92,7 +92,7 @@ pub fn section(skills: &[Skill]) -> String {
 }
 
 /// The role string for one turn. With no skills this is `{role}{others}{notes}{folders}\n\n{shared}`.
-pub fn role_text(role: &str, skills: &[Skill], others: &str, notes: &str, folders: &str, shared: &str) -> String {
+pub(crate) fn role_text(role: &str, skills: &[Skill], others: &str, notes: &str, folders: &str, shared: &str) -> String {
     format!("{role}{}{others}{notes}{folders}\n\n{shared}", section(skills))
 }
 

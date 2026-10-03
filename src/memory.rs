@@ -15,7 +15,7 @@ const CLOSE: &str = "</eggbot-learn>";
 const SECTIONS: [&str; 3] = ["Facts", "Preferences", "Lessons"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Kind {
+pub(crate) enum Kind {
     Fact,
     Preference,
     Lesson,
@@ -23,19 +23,19 @@ pub enum Kind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Update {
-    pub kind: Kind,
-    pub text: String,
+pub(crate) struct Update {
+    pub(crate) kind: Kind,
+    pub(crate) text: String,
     /// None writes this bot's private notes. Some(name) writes a group's notes:
     /// an empty name means the only group this bot is in.
-    pub group: Option<String>,
+    pub(crate) group: Option<String>,
     /// None is not a room bullet. Some(name) writes a room's memory:
     /// an empty name means the only room this bot is in. Never set with `group`.
-    pub room: Option<String>,
+    pub(crate) room: Option<String>,
 }
 
 /// Pulls learn-blocks out of a reply. The visible text is what the user and the next bot see.
-pub fn extract(reply: &str) -> (String, Vec<Update>) {
+pub(crate) fn extract(reply: &str) -> (String, Vec<Update>) {
     if !reply.contains(OPEN) {
         return (reply.to_string(), vec![]);
     }
@@ -59,7 +59,7 @@ pub fn extract(reply: &str) -> (String, Vec<Update>) {
 
 /// Merges `updates` into `existing`. No updates leaves the file bytes unchanged.
 /// Freeform notes stay put; known sections are deduped, newest batch first.
-pub fn learn(existing: &str, updates: &[Update]) -> String {
+pub(crate) fn learn(existing: &str, updates: &[Update]) -> String {
     if updates.is_empty() {
         return existing.to_string();
     }
@@ -87,7 +87,7 @@ pub fn learn(existing: &str, updates: &[Update]) -> String {
 }
 
 /// Role text: the rule, plus the current file so the next turn follows it without opening the file.
-pub fn context(notes: &str) -> String {
+pub(crate) fn context(notes: &str) -> String {
     let notes = notes.trim();
     if notes.is_empty() {
         return format!("\n\n{RULE}\n");
@@ -98,7 +98,7 @@ pub fn context(notes: &str) -> String {
 
 /// Merges `updates` into the notes file at `path`, creating parent directories.
 /// No updates leaves the disk alone, including a missing file.
-pub fn save(path: &std::path::Path, updates: &[Update]) -> std::io::Result<()> {
+pub(crate) fn save(path: &std::path::Path, updates: &[Update]) -> std::io::Result<()> {
     if updates.is_empty() {
         return Ok(());
     }
@@ -356,7 +356,7 @@ fn tidy(text: &str) -> String {
 }
 
 /// Capped copy of a notes file. `where_rest` is named when the file is cut.
-pub fn capped(notes: &str, where_rest: &str) -> String {
+pub(crate) fn capped(notes: &str, where_rest: &str) -> String {
     let notes = neutralize(notes.trim());
     if notes.is_empty() || notes.chars().count() <= MAX_INJECT {
         return notes;

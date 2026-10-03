@@ -4,7 +4,7 @@ use std::time::Duration;
 use gpui_kit::*;
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum Mood {
+pub(crate) enum Mood {
     /// At rest: no animation.
     Still,
     /// The bot is working: a gentle wobble and glancing eyes.
@@ -12,7 +12,7 @@ pub enum Mood {
 }
 
 /// A small vector egg with two eyes, `w` pixels wide.
-pub fn egg(id: impl Into<SharedString>, color: Hsla, w: f32, mood: Mood) -> AnyElement {
+pub(crate) fn egg(id: impl Into<SharedString>, color: Hsla, w: f32, mood: Mood) -> AnyElement {
     let id: SharedString = id.into();
     let base = div().w(px(w)).h(px(w * 1.3)).flex_none();
     match mood {

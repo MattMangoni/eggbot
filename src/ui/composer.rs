@@ -35,7 +35,7 @@ impl SelectItem for Choice {
 const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
 /// Model dropdown value: "claude", "claude:opus", "codex", or "codex:<model id>".
-pub(crate) fn model_value(provider: Provider, model: Option<&str>) -> String {
+fn model_value(provider: Provider, model: Option<&str>) -> String {
     match model {
         Some(m) => format!("{}:{m}", provider.label()),
         None => provider.label().to_string(),

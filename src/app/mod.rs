@@ -39,10 +39,10 @@ pub(crate) struct Eggbot {
     pub(crate) p: Palette,
     pub(crate) bots: Vec<Bot>,
     pub(crate) selected: usize,
-    pub(crate) next_id: usize,
+    next_id: usize,
     pub(crate) menu_open: bool,
     /// Quit is in progress: don't drop the running handoff out of `current`.
-    pub(crate) quitting: bool,
+    quitting: bool,
     /// Bot id whose trash icon was clicked once; a second click deletes.
     pub(crate) confirm_delete: Option<usize>,
     pub(crate) meters: Vec<Meter>,
@@ -54,10 +54,10 @@ pub(crate) struct Eggbot {
     pub(crate) codex_models: Vec<codex::Model>,
     /// None = idle; Some(None) = asking now; Some(Some(e)) = the last question failed with `e`.
     pub(crate) codex_query: Option<Option<String>>,
-    pub(crate) tray: Option<tray::Tray>,
+    tray: Option<tray::Tray>,
     pub(crate) input: Entity<TextareaState>,
     /// Bot id whose draft is in `input`; a different selected bot swaps drafts.
-    pub(crate) draft_bot: Option<usize>,
+    draft_bot: Option<usize>,
     pub(crate) panel: Panel,
     /// 0 daily, 1 weekdays, 2 every N hours, 3 every N minutes
     pub(crate) sched_kind: usize,
@@ -89,7 +89,7 @@ pub(crate) struct Eggbot {
     /// Shown under the composer when adding a folder is refused.
     pub(crate) folder_error: Option<String>,
     /// The window is in front; otherwise news goes out as notifications.
-    pub(crate) active: bool,
+    active: bool,
     /// ⌘F search in the open chat: the query field, matching message indices (oldest first) and the current one.
     pub(crate) find_open: bool,
     pub(crate) find_input: Entity<InputState>,
@@ -100,7 +100,7 @@ pub(crate) struct Eggbot {
     /// The sidebar row being dragged, to hide drop lines that would change nothing.
     pub(crate) dragging: Option<usize>,
     pub(crate) rooms: Vec<room::Room>,
-    pub(crate) next_room_id: usize,
+    next_room_id: usize,
     /// The room open in the main pane; None means the selected bot's chat.
     pub(crate) open_room: Option<usize>,
     pub(crate) room_title: Entity<InputState>,
@@ -111,7 +111,7 @@ pub(crate) struct Eggbot {
     /// Room id whose Delete was clicked once.
     pub(crate) confirm_delete_room: Option<usize>,
     pub(crate) groups: Vec<group::Group>,
-    pub(crate) next_group_id: usize,
+    next_group_id: usize,
     /// The group open in the main pane. A group is notes, not a room.
     pub(crate) open_group: Option<usize>,
     pub(crate) group_title: Entity<InputState>,
@@ -122,11 +122,11 @@ pub(crate) struct Eggbot {
     /// The chat's virtual list: one row per message of the selected bot, plus the typing row.
     pub(crate) list: ListState,
     /// The bot whose messages `list` holds.
-    pub(crate) list_bot: Option<usize>,
+    list_bot: Option<usize>,
     /// The open room's transcript. Separate from `list`, which is one bot's chat.
     pub(crate) room_list: ListState,
     /// Room id `room_list` was built for. None after the room closes, so the next open jumps to the end.
-    pub(crate) room_list_for: Option<usize>,
+    room_list_for: Option<usize>,
 }
 
 impl Eggbot {

@@ -11,27 +11,27 @@ use crate::memory::Update;
 
 /// Saved in `state.json`. `members` are bot ids.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Room {
-    pub id: usize,
-    pub title: String,
-    pub kickoff: String,
-    pub members: Vec<usize>,
+pub(crate) struct Room {
+    pub(crate) id: usize,
+    pub(crate) title: String,
+    pub(crate) kickoff: String,
+    pub(crate) members: Vec<usize>,
     /// Bot that receives the kickoff. Empty until the first member is added.
     #[serde(default)]
-    pub facilitator: Option<usize>,
+    pub(crate) facilitator: Option<usize>,
     #[serde(default)]
-    pub unread: bool,
+    pub(crate) unread: bool,
     /// The kickoff has been delivered at least once.
     #[serde(default)]
-    pub started: bool,
+    pub(crate) started: bool,
     /// Kickoff, replies, and in-room handoffs, in the order they happened.
     #[serde(default)]
-    pub transcript: Vec<Event>,
+    pub(crate) transcript: Vec<Event>,
 }
 
 /// One line of a room's transcript. Names are copied at the time, so a rename does not rewrite history.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Event {
+pub(crate) enum Event {
     Kickoff {
         to: usize,
         name: String,
@@ -61,11 +61,11 @@ pub enum Event {
 }
 
 impl Room {
-    pub fn new(id: usize, title: String) -> Self {
+    pub(crate) fn new(id: usize, title: String) -> Self {
         Self { id, title, kickoff: String::new(), members: vec![], facilitator: None, unread: false, started: false, transcript: vec![] }
     }
 
-    pub fn record_kickoff(&mut self, to: usize, name: &str, text: &str) {
+    pub(crate) fn record_kickoff(&mut self, to: usize, name: &str, text: &str) {
         let text = text.trim();
         if text.is_empty() {
             return;
@@ -74,7 +74,7 @@ impl Room {
     }
 
     /// False when there is nothing to show (a blank reply is not a line).
-    pub fn record_reply(&mut self, bot: usize, name: &str, color: u32, text: &str) -> bool {
+    pub(crate) fn record_reply(&mut self, bot: usize, name: &str, color: u32, text: &str) -> bool {
         let text = text.trim();
         if text.is_empty() {
             return false;
@@ -83,11 +83,11 @@ impl Room {
         true
     }
 
-    pub fn record_handoff(&mut self, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
+    pub(crate) fn record_handoff(&mut self, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
         self.transcript.push(Event::Handoff { from, from_name: from_name.to_string(), color, to, to_name: to_name.to_string(), paused });
     }
 
-    pub fn record_trouble(&mut self, bot: usize, name: &str, text: &str) -> bool {
+    pub(crate) fn record_trouble(&mut self, bot: usize, name: &str, text: &str) -> bool {
         let text = text.trim();
         if text.is_empty() {
             return false;
@@ -97,7 +97,7 @@ impl Room {
     }
 
     /// The user continued the chain, so the latest paused handoff to `to` is no longer waiting.
-    pub fn resume(&mut self, to: usize) {
+    pub(crate) fn resume(&mut self, to: usize) {
         if let Some(Event::Handoff { paused, .. }) = self.transcript.iter_mut().rev().find(|e| matches!(e, Event::Handoff { to: id, paused: true, .. } if *id == to)) {
             *paused = false;
         }
@@ -105,13 +105,13 @@ impl Room {
 }
 
 /// A bot the facilitator can hand work to.
-pub struct Peer<'a> {
-    pub name: &'a str,
-    pub blurb: &'a str,
+pub(crate) struct Peer<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) blurb: &'a str,
 }
 
 /// Why Start cannot run yet.
-pub fn block(title: &str, kickoff: &str, members: &[usize], facilitator: Option<usize>) -> Option<&'static str> {
+pub(crate) fn block(title: &str, kickoff: &str, members: &[usize], facilitator: Option<usize>) -> Option<&'static str> {
     if title.trim().is_empty() {
         Some("Name the room")
     } else if kickoff.trim().is_empty() {
@@ -126,7 +126,7 @@ pub fn block(title: &str, kickoff: &str, members: &[usize], facilitator: Option<
 }
 
 /// What the facilitator is told. Peers are named so `@Name` reaches them; nobody is appointed lead.
-pub fn prompt(title: &str, kickoff: &str, peers: &[Peer<'_>]) -> String {
+pub(crate) fn prompt(title: &str, kickoff: &str, peers: &[Peer<'_>]) -> String {
     let roster = if peers.is_empty() {
         "No other bots are in this room.".to_string()
     } else {
@@ -139,7 +139,7 @@ pub fn prompt(title: &str, kickoff: &str, peers: &[Peer<'_>]) -> String {
 }
 
 /// Adds `id`, or removes it. The first member becomes the facilitator; removing the facilitator promotes the next.
-pub fn toggle(mut members: Vec<usize>, facilitator: Option<usize>, id: usize) -> (Vec<usize>, Option<usize>) {
+pub(crate) fn toggle(mut members: Vec<usize>, facilitator: Option<usize>, id: usize) -> (Vec<usize>, Option<usize>) {
     if let Some(i) = members.iter().position(|m| *m == id) {
         members.remove(i);
         let facilitator = if facilitator == Some(id) { members.first().copied() } else { facilitator.filter(|f| members.contains(f)) };
@@ -151,7 +151,7 @@ pub fn toggle(mut members: Vec<usize>, facilitator: Option<usize>, id: usize) ->
 }
 
 /// `id` receives the next kickoff, and joins the roster if they were not in it.
-pub fn facilitate(mut members: Vec<usize>, id: usize) -> (Vec<usize>, Option<usize>) {
+pub(crate) fn facilitate(mut members: Vec<usize>, id: usize) -> (Vec<usize>, Option<usize>) {
     if !members.contains(&id) {
         members.push(id);
     }
@@ -159,7 +159,7 @@ pub fn facilitate(mut members: Vec<usize>, id: usize) -> (Vec<usize>, Option<usi
 }
 
 /// Drops a deleted bot. If they were the facilitator, the first remaining member takes that seat.
-pub fn forget(mut members: Vec<usize>, facilitator: Option<usize>, gone: usize) -> (Vec<usize>, Option<usize>) {
+pub(crate) fn forget(mut members: Vec<usize>, facilitator: Option<usize>, gone: usize) -> (Vec<usize>, Option<usize>) {
     members.retain(|id| *id != gone);
     let facilitator = match facilitator {
         Some(id) if id != gone && members.contains(&id) => Some(id),
@@ -169,7 +169,7 @@ pub fn forget(mut members: Vec<usize>, facilitator: Option<usize>, gone: usize) 
 }
 
 /// For each room `me` is in, its title and the other members' names (in `bots` order). A room where `me` is alone is left out.
-pub fn peers<'a>(rooms: &'a [Room], bots: &[(usize, &'a str)], me: usize) -> Vec<(&'a str, Vec<&'a str>)> {
+pub(crate) fn peers<'a>(rooms: &'a [Room], bots: &[(usize, &'a str)], me: usize) -> Vec<(&'a str, Vec<&'a str>)> {
     rooms
         .iter()
         .filter(|r| r.members.contains(&me))
@@ -179,27 +179,27 @@ pub fn peers<'a>(rooms: &'a [Room], bots: &[(usize, &'a str)], me: usize) -> Vec
 }
 
 /// Room id to keep on the next hop. A turn that is not in a room, or a target outside the roster, leaves.
-pub fn carry(room: Option<usize>, members: &[usize], target: usize) -> Option<usize> {
+pub(crate) fn carry(room: Option<usize>, members: &[usize], target: usize) -> Option<usize> {
     room.filter(|_| members.contains(&target))
 }
 
 /// `rooms/<id>/NOTES.md` under Application Support. Not mounted in the container, and not the transcript.
-pub fn notes_file(root: &Path, id: usize) -> PathBuf {
+pub(crate) fn notes_file(root: &Path, id: usize) -> PathBuf {
     root.join("rooms").join(id.to_string()).join("NOTES.md")
 }
 
 /// Room bullets this bot may write, and everything else (private and group) untouched.
-pub struct Routed {
+pub(crate) struct Routed {
     /// Not room bullets. A group target on these is unchanged, so `group::route` still sees it.
-    pub rest: Vec<Update>,
+    pub(crate) rest: Vec<Update>,
     /// Index into the `rooms` slice passed to [`route`], then the bullets for that room.
-    pub memory: Vec<(usize, Vec<Update>)>,
+    pub(crate) memory: Vec<(usize, Vec<Update>)>,
 }
 
 /// Splits a learn block. `rooms` are the titles of the rooms this bot is in.
 /// An unnamed room bullet lands on the only room. A name matches one title, ignoring case.
 /// A room bullet with no matching room is dropped, and it is not written to private or group notes.
-pub fn route(updates: &[Update], rooms: &[&str]) -> Routed {
+pub(crate) fn route(updates: &[Update], rooms: &[&str]) -> Routed {
     let mut rest = vec![];
     let mut buckets: Vec<Vec<Update>> = vec![vec![]; rooms.len()];
     for update in updates {
@@ -220,7 +220,7 @@ pub fn route(updates: &[Update], rooms: &[&str]) -> Routed {
 /// The notes argument of `skills::role_text`.
 /// `room` is set only for a turn in that room while this bot is still a member: `(title, file)`.
 /// `sole` is true when the bot belongs to exactly one room. No room leaves `group::notes_for` unchanged.
-pub fn notes_for_turn(private_notes: &str, groups: &[(&str, &str)], room: Option<(&str, &str)>, sole: bool) -> String {
+pub(crate) fn notes_for_turn(private_notes: &str, groups: &[(&str, &str)], room: Option<(&str, &str)>, sole: bool) -> String {
     let base = crate::group::notes_for(private_notes, groups);
     let Some((title, body)) = room else {
         return base;

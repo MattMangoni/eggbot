@@ -40,7 +40,7 @@ impl Eggbot {
     }
 
     /// Starts due schedules the usage guard is willing to run. Held ones keep their anchor.
-    pub(crate) fn run_due(&mut self, cx: &mut Context<Self>) {
+    fn run_due(&mut self, cx: &mut Context<Self>) {
         let before = self.guard_levels();
         let started = self.release_schedules(cx);
         if started || before != self.guard_levels() {

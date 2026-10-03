@@ -59,11 +59,11 @@ pub(crate) fn default_sidebar_open() -> bool {
     true
 }
 
-pub(crate) fn default_throttle() -> f32 {
+fn default_throttle() -> f32 {
     usage::DEFAULT_THROTTLE
 }
 
-pub(crate) fn default_pause() -> f32 {
+fn default_pause() -> f32 {
     usage::DEFAULT_PAUSE
 }
 
@@ -80,7 +80,7 @@ impl Saved {
 
     /// Brings an older file up to date: a single `folder` becomes a mount, the next room and group ids
     /// clear every saved id, and an in-flight `@Name` hop goes back on its queue (user turns and schedules stay stopped).
-    pub(crate) fn migrate(&mut self) {
+    fn migrate(&mut self) {
         for b in &mut self.bots {
             sandbox::adopt_legacy(&mut b.folders, b.folder.take());
             b.queue = handoff::restore(b.current.take(), std::mem::take(&mut b.queue));

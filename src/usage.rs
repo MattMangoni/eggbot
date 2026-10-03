@@ -7,14 +7,14 @@
 use crate::claude::{Provider, Window};
 
 /// Sidebar bars turn amber here. Not a gate.
-pub const AMBER: f32 = 0.80;
+pub(crate) const AMBER: f32 = 0.80;
 /// One bot of that provider at a time.
-pub const DEFAULT_THROTTLE: f32 = 0.90;
+pub(crate) const DEFAULT_THROTTLE: f32 = 0.90;
 /// No new turns. The one already running finishes.
-pub const DEFAULT_PAUSE: f32 = 0.95;
+pub(crate) const DEFAULT_PAUSE: f32 = 0.95;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Level {
+pub(crate) enum Level {
     Ok,
     /// Extra bots wait; schedules wait if one bot of this provider is already going.
     Throttle,
@@ -23,15 +23,15 @@ pub enum Level {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Breach {
-    pub level: Level,
-    pub label: String,
-    pub used: f32,
+pub(crate) struct Breach {
+    pub(crate) level: Level,
+    pub(crate) label: String,
+    pub(crate) used: f32,
     /// Unix seconds the window resets; 0 if the CLI did not say.
-    pub reset: i64,
+    pub(crate) reset: i64,
 }
 
-pub fn provider_name(provider: Provider) -> &'static str {
+pub(crate) fn provider_name(provider: Provider) -> &'static str {
     match provider {
         Provider::Claude => "Claude",
         Provider::Codex => "Codex",
@@ -39,16 +39,16 @@ pub fn provider_name(provider: Provider) -> &'static str {
 }
 
 /// 0..1, or 0 once `reset` is in the past.
-pub fn window_used(w: &Window, now: i64) -> f32 {
+pub(crate) fn window_used(w: &Window, now: i64) -> f32 {
     if w.reset > 0 && now >= w.reset { 0. } else { w.used.clamp(0., 1.) }
 }
 
-pub fn percent(used: f32) -> u32 {
+pub(crate) fn percent(used: f32) -> u32 {
     (used.clamp(0., 1.) * 100.).round() as u32
 }
 
 /// The worst window at or over `throttle`. Pause wins over throttle; ties keep the fuller window.
-pub fn breach(windows: &[Window], now: i64, throttle: f32, pause: f32) -> Option<Breach> {
+pub(crate) fn breach(windows: &[Window], now: i64, throttle: f32, pause: f32) -> Option<Breach> {
     let mut best: Option<Breach> = None;
     for w in windows {
         let used = window_used(w, now);
@@ -80,7 +80,7 @@ fn rank(level: Level) -> u8 {
 }
 
 /// True when a due schedule should start (and move its anchor). False leaves it due.
-pub fn schedule_action(level: Level, bot_busy: bool, bot_queued: bool, provider_taken: bool) -> bool {
+pub(crate) fn schedule_action(level: Level, bot_busy: bool, bot_queued: bool, provider_taken: bool) -> bool {
     if level == Level::Pause {
         return false;
     }
@@ -95,14 +95,14 @@ pub fn schedule_action(level: Level, bot_busy: bool, bot_queued: bool, provider_
     true
 }
 
-pub fn reset_at(reset: i64) -> Option<String> {
+fn reset_at(reset: i64) -> Option<String> {
     if reset <= 0 {
         return None;
     }
     chrono::DateTime::from_timestamp(reset, 0).map(|t| t.with_timezone(&chrono::Local).format("%a %H:%M").to_string())
 }
 
-pub fn explain(provider: &str, breach: &Breach, pause_at: f32, throttle_at: f32) -> String {
+pub(crate) fn explain(provider: &str, breach: &Breach, pause_at: f32, throttle_at: f32) -> String {
     let pct = percent(breach.used);
     let when = reset_at(breach.reset).map(|t| format!(" Resets {t}.")).unwrap_or_default();
     match breach.level {
@@ -113,7 +113,7 @@ pub fn explain(provider: &str, breach: &Breach, pause_at: f32, throttle_at: f32)
 }
 
 /// Sidebar row: why this bot is not starting.
-pub fn short(provider: &str, breach: &Breach) -> String {
+pub(crate) fn short(provider: &str, breach: &Breach) -> String {
     let word = match breach.level {
         Level::Pause => "Paused",
         Level::Throttle => "Throttled",
@@ -123,7 +123,7 @@ pub fn short(provider: &str, breach: &Breach) -> String {
 }
 
 /// One line under the provider's bars.
-pub fn meter_line(breach: &Breach) -> String {
+pub(crate) fn meter_line(breach: &Breach) -> String {
     let word = match breach.level {
         Level::Pause => "Paused",
         Level::Throttle => "One at a time",
@@ -136,7 +136,7 @@ pub fn meter_line(breach: &Breach) -> String {
 }
 
 /// Settings fields, as whole percents. Throttle must sit strictly below pause.
-pub fn parse_limits(throttle: &str, pause: &str) -> Result<(f32, f32), &'static str> {
+pub(crate) fn parse_limits(throttle: &str, pause: &str) -> Result<(f32, f32), &'static str> {
     let throttle = parse_percent(throttle)?;
     let pause = parse_percent(pause)?;
     if throttle >= pause {

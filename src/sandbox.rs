@@ -19,12 +19,12 @@ fn image() -> String {
     format!("eggbot-bot:{:012x}", h.finish() & 0xffff_ffff_ffff)
 }
 
-pub fn container(bot: usize) -> String {
+pub(crate) fn container(bot: usize) -> String {
     format!("eggbot-{bot}")
 }
 
 /// `TZ=<zone>` for `docker exec`: the Mac's time zone, so bots see local dates and times.
-pub fn tz() -> String {
+pub(crate) fn tz() -> String {
     let zone = std::fs::read_link("/etc/localtime").ok().and_then(|p| p.to_str().and_then(|p| p.split("zoneinfo/").nth(1)).map(String::from));
     format!("TZ={}", zone.unwrap_or_else(|| "UTC".into()))
 }
@@ -40,7 +40,7 @@ fn docker(args: &[&str]) -> Result<String, String> {
 }
 
 /// True when `error` means the engine was down, so a waiting handoff must stay queued.
-pub fn engine_down(error: &str) -> bool {
+pub(crate) fn engine_down(error: &str) -> bool {
     error.contains("Could not start Docker")
         || error.contains("Docker did not start")
         || error.contains("Could not run docker")
@@ -50,7 +50,7 @@ pub fn engine_down(error: &str) -> bool {
 }
 
 /// Starts the engine behind the active Docker context, then waits until it answers.
-pub fn wake() -> Result<(), String> {
+pub(crate) fn wake() -> Result<(), String> {
     let context = docker(&["context", "show"]).unwrap_or_default();
     let app = |name: &str| ["/Applications", &format!("{}/Applications", std::env::var("HOME").unwrap_or_default())].iter().any(|d| Path::new(&format!("{d}/{name}.app")).exists());
     let open = |name: &str| run(Command::new("open").args(["-ga", name]));
@@ -76,7 +76,7 @@ pub fn wake() -> Result<(), String> {
 }
 
 /// Docker is up and the bot image exists.
-pub fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
+pub(crate) fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
     if docker(&["info"]).is_err() {
         status("Starting Docker…");
         wake()?;
@@ -95,17 +95,17 @@ pub fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
 }
 
 /// Per bot. Docker allows more; each bind is a macOS file share, so eggbot stops here.
-pub const MAX_MOUNTS: usize = 16;
+pub(crate) const MAX_MOUNTS: usize = 16;
 
 /// A user-picked folder, mounted at `/work/<name>`. `name` is chosen once and stored.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mount {
-    pub path: PathBuf,
-    pub name: String,
+pub(crate) struct Mount {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
 }
 
 impl Mount {
-    pub fn dest(&self) -> String {
+    pub(crate) fn dest(&self) -> String {
         format!("/work/{}", self.name)
     }
 }
@@ -121,7 +121,7 @@ struct Inspect {
 const INSPECT: &str = "{{.Config.Image}}\n{{.State.Running}}\n{{range .Mounts}}{{.Destination}}\t{{.Source}}\n{{end}}";
 
 /// The container is running with `folders` at `/work/<name>` (or `scratch` at `/work`) and `memory` at `/memory`.
-pub fn ensure(bot: usize, folders: &[Mount], scratch: &Path, memory: &Path, status: &dyn Fn(&str)) -> Result<String, String> {
+pub(crate) fn ensure(bot: usize, folders: &[Mount], scratch: &Path, memory: &Path, status: &dyn Fn(&str)) -> Result<String, String> {
     check_folders(folders)?;
     ready(status)?;
     let (name, image) = (container(bot), image());
@@ -150,7 +150,7 @@ pub fn ensure(bot: usize, folders: &[Mount], scratch: &Path, memory: &Path, stat
 }
 
 /// Refuses a path Docker's `-v host:dest` form cannot carry, then canonicalizes it.
-pub fn check_path(path: &Path) -> Result<PathBuf, String> {
+fn check_path(path: &Path) -> Result<PathBuf, String> {
     if !mount_syntax_ok(&path.to_string_lossy()) {
         return Err("Docker cannot mount that path.".into());
     }
@@ -165,7 +165,7 @@ pub fn check_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 /// Appends picked folders. One message covers every path that was skipped.
-pub fn add_mounts(folders: &mut Vec<Mount>, paths: &[PathBuf]) -> Result<(), String> {
+pub(crate) fn add_mounts(folders: &mut Vec<Mount>, paths: &[PathBuf]) -> Result<(), String> {
     let mut errors = vec![];
     for path in paths {
         if folders.len() >= MAX_MOUNTS {
@@ -191,7 +191,7 @@ pub fn add_mounts(folders: &mut Vec<Mount>, paths: &[PathBuf]) -> Result<(), Str
 }
 
 /// Folds a pre-multi-mount `folder` into `folders`. A missing path is kept as stored.
-pub fn adopt_legacy(folders: &mut Vec<Mount>, legacy: Option<PathBuf>) {
+pub(crate) fn adopt_legacy(folders: &mut Vec<Mount>, legacy: Option<PathBuf>) {
     let Some(path) = legacy else { return };
     let path = std::fs::canonicalize(&path).unwrap_or(path);
     if folders.iter().any(|f| f.path == path) {
@@ -202,7 +202,7 @@ pub fn adopt_legacy(folders: &mut Vec<Mount>, legacy: Option<PathBuf>) {
 }
 
 /// Directory name under `/work`: the last path component, made safe, then `-2`, `-3` on a clash.
-pub fn mount_name(path: &Path, taken: &[String]) -> String {
+fn mount_name(path: &Path, taken: &[String]) -> String {
     let raw = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let cleaned: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' }).collect();
     let mut base: String = cleaned.trim_matches(|c| c == '-' || c == '.').chars().take(48).collect();
@@ -219,7 +219,7 @@ pub fn mount_name(path: &Path, taken: &[String]) -> String {
 }
 
 /// Where the turn starts: the only project folder, or `/work` when there are several or none.
-pub fn cwd(folders: &[Mount]) -> String {
+pub(crate) fn cwd(folders: &[Mount]) -> String {
     match folders {
         [one] => one.dest(),
         _ => "/work".into(),
@@ -227,7 +227,7 @@ pub fn cwd(folders: &[Mount]) -> String {
 }
 
 /// Appended to the role so the bot hears the container paths. Empty when nothing is mounted.
-pub fn folders_note(folders: &[Mount]) -> String {
+pub(crate) fn folders_note(folders: &[Mount]) -> String {
     if folders.is_empty() {
         return String::new();
     }
@@ -354,26 +354,26 @@ fn terminal(cmd: &str) -> Result<(), String> {
 }
 
 /// Opens Terminal with the provider's own login flow in a throwaway container; eggbot never sees the token.
-pub fn sign_in(codex: bool) -> Result<(), String> {
+pub(crate) fn sign_in(codex: bool) -> Result<(), String> {
     let login = if codex { "codex login --device-auth" } else { "claude" };
     terminal(&format!("docker run -it --rm -v {CLAUDE_VOLUME} -v {CODEX_VOLUME} {} {login}", image()))
 }
 
 /// Setup checks; each is a quick `docker` call.
-pub fn installed() -> bool {
+pub(crate) fn installed() -> bool {
     docker(&["--version"]).is_ok()
 }
 
-pub fn running() -> bool {
+pub(crate) fn running() -> bool {
     docker(&["info"]).is_ok()
 }
 
-pub fn image_ready() -> bool {
+pub(crate) fn image_ready() -> bool {
     docker(&["image", "inspect", &image()]).is_ok()
 }
 
 /// Installs Colima (free, open source) with the Docker CLI in Terminal, or opens its page without Homebrew.
-pub fn install_engine() -> Result<(), String> {
+pub(crate) fn install_engine() -> Result<(), String> {
     if run(Command::new("brew").arg("--version")).is_ok() {
         terminal("brew install colima docker && colima start --cpu 4 --memory 8")
     } else {
@@ -382,24 +382,24 @@ pub fn install_engine() -> Result<(), String> {
 }
 
 /// True once the shared Claude volume holds a working login (`claude auth status` exits 0).
-pub fn claude_signed_in() -> bool {
+pub(crate) fn claude_signed_in() -> bool {
     docker(&["run", "--rm", "-v", CLAUDE_VOLUME, &image(), "claude", "auth", "status"]).is_ok()
 }
 
 /// Stops whatever agent turn is running inside the bot's container.
-pub fn interrupt(bot: usize) {
+pub(crate) fn interrupt(bot: usize) {
     let _ = docker(&["exec", &container(bot), "pkill", "-f", "claude -p|codex app-server"]);
 }
 
 /// `codex app-server` in a throwaway container, for account questions when no bot container is needed.
-pub fn codex_oneshot() -> Command {
+pub(crate) fn codex_oneshot() -> Command {
     let mut cmd = Command::new("docker");
     cmd.args(["run", "--rm", "-i", "-v", CODEX_VOLUME, &image(), "codex", "app-server"]);
     cmd
 }
 
 /// Removes the bot's container; the shared login volume stays.
-pub fn remove(bot: usize) {
+pub(crate) fn remove(bot: usize) {
     let _ = docker(&["rm", "-f", &container(bot)]);
 }
 
