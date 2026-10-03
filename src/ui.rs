@@ -20,7 +20,7 @@ use crate::egg::{Mood, egg};
 use crate::usage;
 use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Dismiss, Eggbot, Find, OpenSettings, OpenSetup, Panel, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
 
-const ROW_H: f32 = 52.;
+const ROW_H: f32 = 48.;
 const ROW_GAP: f32 = 2.;
 /// The line that shows where a dragged bot will land.
 const DROP_LINE: u32 = 0x0A84FF;
@@ -340,9 +340,49 @@ impl Eggbot {
             )
             .child(self.rooms_nav(cx))
             .child(self.groups_nav(cx))
-            .children(self.meters.iter().map(|m| self.usage_meter(m)))
-            .child(div().h_3())
+            .when(!self.meters.is_empty(), |d| d.child(div().flex_none().flex().flex_col().gap_3().px_4().py_3().border_t_1().border_color(p.line).children(self.meters.iter().map(|m| self.usage_meter(m)))))
             .child(handle)
+    }
+
+    /// A selectable row for rooms and groups: same height, padding and icon slot as a bot row.
+    fn nav_row(&self, id: (&'static str, usize), on: bool, icon: impl IntoElement, title: String, subtitle: String) -> Stateful<Div> {
+        let p = self.p;
+        div()
+            .id(id)
+            .h(px(ROW_H))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_2()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .when(on, |d| d.bg(p.tint))
+            .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+            .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().child(icon))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(div().text_sm().text_color(p.ink).truncate().child(title))
+                    .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
+            )
+    }
+
+    /// A section title with its + button; the button lines up with the one in the sidebar header.
+    fn nav_header(&self, title: &'static str, plus: Stateful<Div>) -> Div {
+        let p = self.p;
+        div()
+            .h(px(32.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .pl_4()
+            .pr_2()
+            .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.muted).child(title))
+            .child(plus.size(px(28.)).flex().items_center().justify_center().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(IconName::Plus).size_4()))
     }
 
     /// Rooms sit under the bot list: a title, who is in, and a dot when a member has news.
@@ -357,60 +397,21 @@ impl Eggbot {
                 (Some(b), _) => b.name.clone(),
                 _ => "No bots yet".into(),
             };
-            div()
-                .id(("room", id))
-                .h(px(36.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .rounded(px(8.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.tint))
-                .when(!on, |d| d.hover(|s| s.bg(p.hover)))
+            let icon = div().size(px(9.)).rounded(px(2.)).border_1().border_color(if on { p.ink } else { p.muted });
+            self.nav_row(("room", id), on, icon, r.title.clone(), subtitle)
                 .on_click(cx.listener(move |this, _, window, cx| this.show_room(id, window, cx)))
-                .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().child(div().size(px(8.)).rounded(px(2.)).border_1().border_color(if on { p.ink } else { p.muted })))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .overflow_hidden()
-                        .child(div().text_sm().text_color(p.ink).truncate().child(r.title.clone()))
-                        .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
-                )
                 .when(r.unread && !on, |d| d.child(div().size(px(7.)).flex_none().rounded_full().bg(p.ink)))
         });
+        let plus = div().id("new-room").on_click(cx.listener(|this, _, window, cx| this.new_room(window, cx)));
         div()
             .flex_none()
             .flex()
             .flex_col()
+            .pb_2()
             .border_t_1()
             .border_color(p.line)
-            .child(
-                div()
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .pl_4()
-                    .pr_2()
-                    .child(div().flex_1().text_xs().text_color(p.muted).child("Rooms"))
-                    .child(
-                        div()
-                            .id("new-room")
-                            .size(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .text_color(p.muted)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(p.hover).text_color(p.ink))
-                            .on_click(cx.listener(|this, _, window, cx| this.new_room(window, cx)))
-                            .child(Icon::new(IconName::Plus).size_4()),
-                    ),
-            )
-            .child(div().id("room-list").max_h(px(160.)).overflow_y_scroll().flex().flex_col().px_2().pb_1().children(rows))
+            .child(self.nav_header("Rooms", plus))
+            .child(div().id("room-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows))
     }
 
     /// Groups sit under rooms. A group shares notes; it has no transcript and no facilitator.
@@ -425,59 +426,19 @@ impl Eggbot {
                 [one] => one.clone(),
                 [first, rest @ ..] => format!("{first} + {}", rest.len()),
             };
-            div()
-                .id(("group", id))
-                .h(px(36.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .rounded(px(8.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.tint))
-                .when(!on, |d| d.hover(|s| s.bg(p.hover)))
-                .on_click(cx.listener(move |this, _, window, cx| this.show_group(id, window, cx)))
-                .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().child(div().size(px(8.)).rounded_full().border_1().border_color(if on { p.ink } else { p.muted })))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .overflow_hidden()
-                        .child(div().text_sm().text_color(p.ink).truncate().child(g.title.clone()))
-                        .child(div().text_xs().text_color(p.muted).truncate().child(subtitle)),
-                )
+            let icon = Icon::new(IconName::Network).size_4().text_color(if on { p.ink } else { p.muted });
+            self.nav_row(("group", id), on, icon, g.title.clone(), subtitle).on_click(cx.listener(move |this, _, window, cx| this.show_group(id, window, cx)))
         });
+        let plus = div().id("new-group").on_click(cx.listener(|this, _, window, cx| this.new_group(window, cx)));
         div()
             .flex_none()
             .flex()
             .flex_col()
+            .pb_2()
             .border_t_1()
             .border_color(p.line)
-            .child(
-                div()
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .pl_4()
-                    .pr_2()
-                    .child(div().flex_1().text_xs().text_color(p.muted).child("Groups"))
-                    .child(
-                        div()
-                            .id("new-group")
-                            .size(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .text_color(p.muted)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(p.hover).text_color(p.ink))
-                            .on_click(cx.listener(|this, _, window, cx| this.new_group(window, cx)))
-                            .child(Icon::new(IconName::Plus).size_4()),
-                    ),
-            )
-            .child(div().id("group-list").max_h(px(120.)).overflow_y_scroll().flex().flex_col().px_2().pb_1().children(rows))
+            .child(self.nav_header("Groups", plus))
+            .child(div().id("group-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows))
     }
 
     fn usage_meter(&self, meter: &Meter) -> impl IntoElement {
@@ -486,14 +447,12 @@ impl Eggbot {
         let at = chrono::DateTime::from_timestamp(meter.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
         let name = if meter.provider == Provider::Codex { "Codex" } else { "Claude" };
         div()
-            .px_4()
-            .pt_2()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(6.))
             .text_xs()
             .text_color(p.muted)
-            .child(div().flex().child(div().flex_1().child(name)).child(format!("updated {at}")))
+            .child(div().flex().items_center().child(div().flex_1().font_weight(FontWeight::MEDIUM).child(name)).child(div().opacity(0.8).child(format!("updated {at}"))))
             .children(meter.windows.iter().map(|w| {
                 let v = usage::window_used(w, now);
                 let fill = if v >= self.pause { p.err } else if v >= usage::AMBER { p.warn } else { p.muted };
