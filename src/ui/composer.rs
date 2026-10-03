@@ -8,10 +8,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{link, soft_shadow};
+use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::usage;
-use crate::{Bot, Choice, MODELS};
+use crate::{Choice, MODELS};
 
 impl Eggbot {
     /// Fills the model and effort dropdowns for the selected bot (options depend on provider and model).

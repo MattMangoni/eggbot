@@ -16,12 +16,11 @@ mod ui;
 mod usage;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
+use app::bot::{Bot, Msg, reply_text};
 use app::{Eggbot, Panel};
 use claude::{Meter, Provider};
-use egg::Mood;
 use gpui_kit::assets::Assets;
 use gpui_kit::component::Theme;
 use gpui_kit::component::select::SelectItem;
@@ -161,34 +160,6 @@ impl Palette {
     }
 }
 
-struct Preset {
-    name: &'static str,
-    blurb: &'static str,
-    color: u32,
-    role: &'static str,
-}
-
-const PRESETS: [Preset; 4] = [
-    Preset {
-        name: "Reviewer",
-        blurb: "Reads diffs, finds bugs, weighs risk",
-        color: 0xF5C6A5,
-        role: "You are Reviewer, a code reviewer living in eggbot. Read code and diffs carefully. Find bugs, security issues and risky changes. For each finding give the file, the line, why it matters and a concrete fix, ranked by severity. Do not edit files unless asked.",
-    },
-    Preset {
-        name: "Implementer",
-        blurb: "Writes and changes code",
-        color: 0xC6DDB8,
-        role: "You are Implementer, a software engineer living in eggbot. Write and change code with the smallest correct diff. Match the existing style, reuse what exists, and explain briefly what you changed.",
-    },
-    Preset {
-        name: "Designer",
-        blurb: "UI and UX critique and polish",
-        color: 0xD6CAF0,
-        role: "You are Designer, a UI and UX specialist living in eggbot. Critique and improve hierarchy, spacing, typography, color, motion, accessibility and interaction states. Give concrete, actionable suggestions.",
-    },
-    Preset { name: "Custom", blurb: "A blank bot you shape yourself", color: 0xF3DF9C, role: "You are a helpful bot living in eggbot." },
-];
 /// One row of the setup checklist.
 #[derive(Clone, PartialEq)]
 enum Check {
@@ -241,188 +212,7 @@ impl SelectItem for Choice {
     }
 }
 
-const SHELLS: [u32; 8] = [0xF5C6A5, 0xC6DDB8, 0xD6CAF0, 0xF3DF9C, 0xB9D8EA, 0xF2B8C6, 0xCFE3D8, 0xE3D2B9];
 const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
-
-#[derive(Serialize, Deserialize)]
-enum Msg {
-    User(String),
-    Bot(String),
-    Tool {
-        id: String,
-        verb: String,
-        target: String,
-        detail: String,
-        open: bool,
-    },
-    Error(String),
-    /// Work handed over by another bot; `paused` when the chain hit the hop limit.
-    Handoff {
-        from: String,
-        color: u32,
-        prompt: String,
-        text: String,
-        paused: bool,
-        open: bool,
-        /// Set when this hop stays inside a room. Continue chain keeps it on the next turn.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        room: Option<usize>,
-    },
-    Sent {
-        to: String,
-    },
-    /// Marks where a fresh session began.
-    Divider(String),
-    /// A turn started by a schedule, shown where a user message would be.
-    Scheduled {
-        prompt: String,
-        label: String,
-    },
-    /// Replaces a "not signed in" error once the login works; `prompt` is what failed, for "Send again".
-    SignedIn {
-        provider: Provider,
-        prompt: Option<String>,
-    },
-    /// A room kickoff, shown in the facilitator's chat. `prompt` is what the bot was told.
-    Kickoff {
-        room_id: usize,
-        room: String,
-        text: String,
-        prompt: String,
-    },
-}
-
-/// Bot text written at and after `from`. Earlier lines belong to a previous turn.
-fn reply_text(msgs: &[Msg], from: usize) -> String {
-    let from = from.min(msgs.len());
-    msgs[from..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
-}
-
-impl Msg {
-    /// The text search looks in: what people and bots wrote, not tool output.
-    fn searchable(&self) -> Option<&str> {
-        match self {
-            Msg::User(t) | Msg::Bot(t) | Msg::Handoff { text: t, .. } | Msg::Scheduled { prompt: t, .. } | Msg::Kickoff { text: t, .. } => Some(t),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct Bot {
-    id: usize,
-    name: String,
-    preset: usize,
-    /// User-picked folders, each mounted at `/work/<name>`.
-    #[serde(default)]
-    folders: Vec<sandbox::Mount>,
-    /// Single folder from before multi-mount. Folded into `folders` on load.
-    #[serde(default, skip_serializing)]
-    folder: Option<PathBuf>,
-    // renamed when bots moved into containers: host sessions cannot resume there
-    #[serde(rename = "sandbox_session")]
-    session: Option<String>,
-    #[serde(default)]
-    provider: Provider,
-    /// Codex thread id, kept apart from the Claude session so switching provider loses neither.
-    #[serde(default)]
-    thread: Option<String>,
-    msgs: Vec<Msg>,
-    #[serde(default)]
-    schedules: Vec<schedule::Schedule>,
-    /// Edits made in the bot editor; None = the preset's value.
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    color: Option<u32>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    effort: Option<String>,
-    /// Copied from the preset at hatch, then owned by this bot.
-    #[serde(default)]
-    skills: Vec<skills::Skill>,
-    #[serde(skip)]
-    run: Option<Arc<claude::Handle>>,
-    #[serde(skip)]
-    status: Option<String>,
-    #[serde(skip)]
-    stopped: bool,
-    /// Handoff hops that led to the current turn (0 = started by the user).
-    #[serde(skip)]
-    hops: u32,
-    /// `msgs` index where the running turn's output starts. A queued kickoff is not always the last marker.
-    #[serde(skip)]
-    reply_from: usize,
-    /// Turns waiting for this one to finish (handoffs, and schedules that arrived mid-turn).
-    #[serde(default)]
-    queue: Vec<handoff::Pending>,
-    /// The running turn uses a throwaway session (schedules): its session id and context are not kept.
-    #[serde(skip)]
-    fresh_turn: bool,
-    /// The running turn saves notes before a fresh start; on success the session is dropped.
-    #[serde(skip)]
-    refreshing: bool,
-    /// Codex: the role last delivered to the current thread; a different role is sent again once.
-    #[serde(default)]
-    codex_role: Option<String>,
-    /// Role sent with the running turn; becomes `codex_role` when the turn succeeds.
-    #[serde(skip)]
-    pending_role: Option<String>,
-    /// Tokens in the main session's context and the model's window (0 = unknown).
-    #[serde(default)]
-    context: (u64, u64),
-    /// Something arrived that the user has not seen yet.
-    #[serde(default)]
-    unread: bool,
-    /// The running turn. Retried after a sign-in clash, and restored when it is a handoff.
-    #[serde(default)]
-    current: Option<handoff::Pending>,
-    /// The running turn is already that one retry.
-    #[serde(skip)]
-    retried: bool,
-    /// Newest-first names this bot successfully handed work to. A paused chain is not recorded.
-    #[serde(default)]
-    recent: Vec<String>,
-    /// Composer text kept while another bot is selected. Not saved across restarts.
-    #[serde(skip)]
-    draft: String,
-}
-
-impl Bot {
-    fn preset(&self) -> &'static Preset {
-        &PRESETS[self.preset.min(PRESETS.len() - 1)]
-    }
-
-    fn color(&self) -> u32 {
-        self.color.unwrap_or(self.preset().color)
-    }
-
-    fn role(&self) -> &str {
-        self.role.as_deref().unwrap_or(self.preset().role)
-    }
-
-    /// Sidebar subtitle: the preset blurb, or the start of an edited role.
-    fn blurb(&self) -> String {
-        match &self.role {
-            Some(r) => r.lines().next().unwrap_or_default().chars().take(60).collect(),
-            None => self.preset().blurb.to_string(),
-        }
-    }
-
-    fn busy(&self) -> bool {
-        self.run.is_some()
-    }
-
-    fn mood(&self) -> Mood {
-        if self.busy() { Mood::Thinking } else { Mood::Still }
-    }
-
-    /// True while the bot works but is not writing text (thinking or running a tool).
-    fn waiting(&self) -> bool {
-        self.busy() && !matches!(self.msgs.last(), Some(Msg::Bot(_)))
-    }
-}
 
 fn data_dir() -> PathBuf {
     // ponytail: macOS path only; use the `dirs` crate when Linux/Windows builds start
@@ -568,54 +358,6 @@ impl Eggbot {
         }
     }
 
-    fn hatch(&mut self, preset: usize) {
-        self.leave_room();
-        self.leave_group();
-        self.panel = Panel::None;
-        self.skill_at = None;
-        let base = PRESETS[preset].name;
-        let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
-        let name = (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap();
-        self.bots.push(Bot {
-            id: self.next_id,
-            name,
-            preset,
-            folders: vec![],
-            folder: None,
-            session: None,
-            provider: Provider::Claude,
-            thread: None,
-            msgs: vec![],
-            schedules: vec![],
-            role: None,
-            color: None,
-            model: None,
-            effort: None,
-            // copied by preset name, so this bot keeps its own list after hatch
-            skills: skills::defaults(PRESETS[preset].name),
-            run: None,
-            status: None,
-            stopped: false,
-            hops: 0,
-            reply_from: 0,
-            queue: vec![],
-            fresh_turn: false,
-            refreshing: false,
-            codex_role: None,
-            pending_role: None,
-            context: (0, 0),
-            unread: false,
-            current: None,
-            retried: false,
-            recent: vec![],
-            draft: String::new(),
-        });
-        self.next_id += 1;
-        self.selected = self.bots.len() - 1;
-        self.selects_stale = true;
-        self.save();
-    }
-
     fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_room();
         self.leave_group();
@@ -738,21 +480,6 @@ impl Eggbot {
         if let Some(i) = self.bots.iter().position(|b| b.id == id) {
             self.select(i, window, cx);
         }
-    }
-
-    /// Moves bot `from` to just above row `before` (`before` = len: the end); the selection stays on the same bot.
-    fn move_bot(&mut self, from: usize, before: usize, cx: &mut Context<Self>) {
-        self.dragging = None;
-        cx.notify();
-        if from >= self.bots.len() || before > self.bots.len() || before == from || before == from + 1 {
-            return;
-        }
-        let selected = self.bots[self.selected].id;
-        let bot = self.bots.remove(from);
-        self.bots.insert(if before > from { before - 1 } else { before }, bot);
-        self.selected = self.bots.iter().position(|b| b.id == selected).unwrap_or(0);
-        self.save();
-        cx.notify();
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1714,73 +1441,6 @@ impl Eggbot {
         }
     }
 
-    /// Deletes the bot, its container and its scratch folder; never a mounted folder.
-    fn delete(&mut self, id: usize, cx: &mut Context<Self>) {
-        let Some(i) = self.bots.iter().position(|b| b.id == id) else { return };
-        if let Some(run) = &self.bots[i].run {
-            run.stop();
-        }
-        self.bots.remove(i);
-        for room in &mut self.rooms {
-            (room.members, room.facilitator) = room::forget(std::mem::take(&mut room.members), room.facilitator, id);
-        }
-        for group in &mut self.groups {
-            group.members = group::forget(std::mem::take(&mut group.members), id);
-        }
-        self.selected = self.selected.min(self.bots.len().saturating_sub(1));
-        self.confirm_delete = None;
-        self.save();
-        let scratch = data_dir().join("bots").join(id.to_string());
-        cx.background_executor()
-            .spawn(async move {
-                sandbox::remove(id);
-                let _ = std::fs::remove_dir_all(scratch);
-            })
-            .detach();
-        cx.notify();
-    }
-
-    fn pick_folder(&mut self, cx: &mut Context<Self>) {
-        let Some(bot) = self.bots.get(self.selected) else { return };
-        if bot.folders.len() >= sandbox::MAX_MOUNTS {
-            self.folder_error = Some(format!("A bot can mount at most {} folders.", sandbox::MAX_MOUNTS));
-            cx.notify();
-            return;
-        }
-        let id = bot.id;
-        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some("Mount folders".into()) });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            if paths.is_empty() {
-                return;
-            }
-            this.update(cx, |this, cx| {
-                let show = this.bots.get(this.selected).is_some_and(|b| b.id == id);
-                if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
-                    let err = sandbox::add_mounts(&mut b.folders, &paths).err();
-                    if show {
-                        this.folder_error = err;
-                    }
-                }
-                this.save();
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn remove_folder(&mut self, id: usize, index: usize, cx: &mut Context<Self>) {
-        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id)
-            && index < bot.folders.len()
-        {
-            bot.folders.remove(index);
-        }
-        self.folder_error = None;
-        self.save();
-        cx.notify();
-    }
-
     /// The login finishes in Terminal; check every 5 s for 5 minutes and tell the user when it works.
     fn watch_sign_in(&mut self, provider: Provider, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -2322,18 +1982,5 @@ mod tests {
         let restored = super::handoff::restore(Some(turn), vec![]);
         assert_eq!(restored[0].room, Some(4));
         assert_eq!(restored[0].hops, 0);
-    }
-
-    #[test]
-    fn reply_text_ignores_lines_from_before_the_turn() {
-        let msgs = vec![
-            super::Msg::Bot("earlier".into()),
-            super::Msg::Kickoff { room_id: 1, room: "Standup".into(), text: "go".into(), prompt: "prompt".into() },
-            super::Msg::Bot("partial".into()),
-            super::Msg::User("meanwhile".into()),
-            super::Msg::Bot("other".into()),
-        ];
-        assert_eq!(super::reply_text(&msgs, 4), "other");
-        assert_eq!(super::reply_text(&msgs, msgs.len()), "");
     }
 }

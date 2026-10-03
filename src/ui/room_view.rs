@@ -294,7 +294,7 @@ impl Eggbot {
     fn room_live_row(&self, bot_id: usize) -> AnyElement {
         let p = self.p;
         let Some(bot) = self.bots.iter().find(|b| b.id == bot_id) else { return div().into_any_element() };
-        let text = crate::reply_text(&bot.msgs, bot.reply_from);
+        let text = crate::app::bot::reply_text(&bot.msgs, bot.reply_from);
         let body = if text.trim().is_empty() {
             div().text_sm().text_color(p.muted).child(bot.status.clone().unwrap_or_else(|| "Thinking…".into())).into_any_element()
         } else {

@@ -9,10 +9,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{READ_W, button};
+use crate::app::bot::{Bot, Msg};
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::egg::{Mood, egg};
-use crate::{Bot, Msg, handoff, hex};
+use crate::{handoff, hex};
 
 impl Eggbot {
     pub(crate) fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
