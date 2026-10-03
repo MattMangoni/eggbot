@@ -34,27 +34,42 @@ impl SelectItem for Choice {
 
 const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
+/// Model dropdown value: "claude", "claude:opus", "codex", or "codex:<model id>".
+pub(crate) fn model_value(provider: Provider, model: Option<&str>) -> String {
+    match model {
+        Some(m) => format!("{}:{m}", provider.label()),
+        None => provider.label().to_string(),
+    }
+}
+
+/// The reverse of `model_value`. Anything that is not Codex is Claude.
+pub(crate) fn parse_model_value(value: &str) -> (Provider, Option<&str>) {
+    let (provider, model) = match value.split_once(':') {
+        Some((p, m)) => (p, Some(m)),
+        None => (value, None),
+    };
+    (if provider == "codex" { Provider::Codex } else { Provider::Claude }, model)
+}
+
+/// "Claude", or "Claude · Opus" once a model is named.
+fn model_label(provider: Provider, name: Option<&str>) -> String {
+    let who = usage::provider_name(provider);
+    name.map_or_else(|| who.to_string(), |n| format!("{who} · {n}"))
+}
+
 impl Eggbot {
     /// Fills the model and effort dropdowns for the selected bot (options depend on provider and model).
     pub(crate) fn sync_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selects_stale = false;
         let Some(bot) = self.bots.get(self.selected) else { return };
-        let choice = |value: &str, label: String| Choice { value: Some(value.to_string()), label: label.into() };
+        let choice = |provider, model: Option<&str>, name: Option<&str>| Choice { value: Some(model_value(provider, model)), label: model_label(provider, name).into() };
         let models: Vec<Choice> = MODELS
             .iter()
-            .map(|(alias, label)| match alias {
-                Some(a) => choice(&format!("claude:{a}"), format!("Claude · {label}")),
-                None => choice("claude", "Claude".into()),
-            })
-            .chain(std::iter::once(choice("codex", "Codex".into())))
-            .chain(self.codex_models.iter().map(|m| choice(&format!("codex:{}", m.id), format!("Codex · {}", m.name))))
+            .map(|(alias, label)| choice(Provider::Claude, *alias, alias.map(|_| *label)))
+            .chain(std::iter::once(choice(Provider::Codex, None, None)))
+            .chain(self.codex_models.iter().map(|m| choice(Provider::Codex, Some(&m.id), Some(&m.name))))
             .collect();
-        let current = match (&bot.provider, &bot.model) {
-            (Provider::Claude, None) => "claude".to_string(),
-            (Provider::Claude, Some(m)) => format!("claude:{m}"),
-            (Provider::Codex, None) => "codex".to_string(),
-            (Provider::Codex, Some(m)) => format!("codex:{m}"),
-        };
+        let current = model_value(bot.provider, bot.model.as_deref());
         let levels: Vec<String> = match bot.provider {
             Provider::Claude => ["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec(),
             Provider::Codex => self.codex_models.iter().find(|m| bot.model.as_ref().map_or(m.default, |id| *id == m.id)).map(|m| m.efforts.clone()).unwrap_or_default(),
@@ -118,14 +133,9 @@ impl Eggbot {
             .cloned()
             .flatten()
             .map(|v| {
-                let (provider, model) = v.split_once(':').unwrap_or((v.as_str(), ""));
-                let name = MODELS.iter().find(|(a, _)| *a == Some(model)).map(|(_, l)| l.to_string()).or_else(|| self.codex_models.iter().find(|m| m.id == model).map(|m| m.name.clone()));
-                match (provider, name) {
-                    ("codex", Some(n)) => format!("Codex · {n}"),
-                    ("codex", None) => "Codex".into(),
-                    (_, Some(n)) => format!("Claude · {n}"),
-                    _ => "Claude".into(),
-                }
+                let (provider, model) = parse_model_value(&v);
+                let name = model.and_then(|m| MODELS.iter().find(|(a, _)| *a == Some(m)).map(|(_, l)| l.to_string()).or_else(|| self.codex_models.iter().find(|x| x.id == m).map(|x| x.name.clone())));
+                model_label(provider, name.as_deref())
             })
             .unwrap_or_else(|| "Claude".into());
         let effort_label = bot.effort.clone().unwrap_or_else(|| "Default effort".into());
@@ -231,5 +241,23 @@ impl Eggbot {
                     .when_some(self.folder_error.clone(), |d, e| d.child(div().min_w_0().text_xs().text_color(p.err).truncate().child(e)))
                     .children(note),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
+    use core::prelude::v1::test;
+
+    #[test]
+    fn model_values_round_trip_and_name_the_model() {
+        for (provider, model) in [(Provider::Claude, None), (Provider::Claude, Some("opus")), (Provider::Codex, None), (Provider::Codex, Some("gpt-5.5-codex"))] {
+            assert_eq!(parse_model_value(&model_value(provider, model)), (provider, model));
+        }
+        assert_eq!(model_value(Provider::Claude, Some("opus")), "claude:opus");
+        assert_eq!(parse_model_value("anything"), (Provider::Claude, None));
+        assert_eq!(model_label(Provider::Codex, Some("GPT-5")), "Codex · GPT-5");
+        assert_eq!(model_label(Provider::Claude, None), "Claude");
     }
 }

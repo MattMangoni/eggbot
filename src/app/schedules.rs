@@ -1,15 +1,44 @@
 //! Due schedules and the usage guard: plan meters, pause and throttle checks, and starting scheduled runs.
 
+use std::time::Duration;
+
 use gpui_kit::*;
 
 use super::Eggbot;
 use super::bot::{Bot, Msg};
 use crate::claude::{Meter, Provider};
-use crate::{handoff, usage};
+use crate::{handoff, sandbox, usage};
 
 const QUIET: &str = "\n\n(This is a scheduled run. If nothing here needs the user's attention, reply with exactly QUIET and nothing else.)";
 
 impl Eggbot {
+    /// The background tick: resumes queued work, then starts due schedules. The first check comes soon after launch,
+    /// so runs missed while eggbot was closed happen once.
+    pub(crate) fn start_ticker(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut wait = Duration::from_secs(3);
+            loop {
+                cx.background_executor().timer(wait).await;
+                let needs_docker = match this.update(cx, |this, _| this.bots.iter().any(|b| !b.busy() && !b.queue.is_empty())) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                // docker info can block; only ask when a handoff is actually waiting
+                if needs_docker {
+                    let online = cx.background_executor().spawn(async { sandbox::running() }).await;
+                    if this.update(cx, |this, cx| this.pump_queues(online, None, cx)).is_err() {
+                        break;
+                    }
+                }
+                if this.update(cx, |this, cx| this.run_due(cx)).is_err() {
+                    break;
+                }
+                wait = Duration::from_secs(20);
+            }
+        })
+        .detach();
+    }
+
     /// Starts due schedules the usage guard is willing to run. Held ones keep their anchor.
     pub(crate) fn run_due(&mut self, cx: &mut Context<Self>) {
         let before = self.guard_levels();

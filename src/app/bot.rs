@@ -10,6 +10,7 @@ use super::{Eggbot, Panel};
 use crate::app::state::data_dir;
 use crate::claude::Provider;
 use crate::egg::Mood;
+use crate::ui::composer::parse_model_value;
 use crate::{claude, group, handoff, room, sandbox, schedule, skills};
 
 pub(crate) struct Preset {
@@ -331,8 +332,34 @@ impl Eggbot {
         self.save();
         cx.notify();
     }
-}
 
+    /// The composer's model dropdown changed. Effort levels differ per model, so effort goes back to the default.
+    pub(crate) fn pick_model(&mut self, value: &str, cx: &mut Context<Self>) {
+        let (provider, model) = parse_model_value(value);
+        let Some(b) = self.bots.get_mut(self.selected) else { return };
+        if b.provider != provider {
+            b.provider = provider;
+            // the meter tracks the provider's session; it refills on the next turn
+            b.context = (0, 0);
+        }
+        b.model = model.map(str::to_string);
+        b.effort = None;
+        if provider == Provider::Codex && self.codex_models.is_empty() {
+            self.refresh_codex(1, cx);
+        }
+        self.selects_stale = true;
+        self.save();
+        cx.notify();
+    }
+
+    pub(crate) fn pick_effort(&mut self, effort: Option<String>, cx: &mut Context<Self>) {
+        if let Some(b) = self.bots.get_mut(self.selected) {
+            b.effort = effort;
+            self.save();
+            cx.notify();
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

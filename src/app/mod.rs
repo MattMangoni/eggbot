@@ -188,36 +188,14 @@ impl Eggbot {
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let effort_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         cx.subscribe_in(&model_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
-            // values look like "claude", "claude:opus", "codex", "codex:<model id>"
-            let SelectEvent::Confirm(Some(Some(value))) = ev else { return };
-            let (provider, model) = match value.split_once(':') {
-                Some((p, m)) => (p, Some(m.to_string())),
-                None => (value.as_str(), None),
-            };
-            let provider = if provider == "codex" { Provider::Codex } else { Provider::Claude };
-            let Some(b) = this.bots.get_mut(this.selected) else { return };
-            if b.provider != provider {
-                b.provider = provider;
-                // the meter tracks the provider's session; it refills on the next turn
-                b.context = (0, 0);
+            if let SelectEvent::Confirm(Some(Some(value))) = ev {
+                this.pick_model(value, cx);
             }
-            // effort levels differ per model; fall back to the default level
-            b.model = model;
-            b.effort = None;
-            if provider == Provider::Codex && this.codex_models.is_empty() {
-                this.refresh_codex(1, cx);
-            }
-            this.selects_stale = true;
-            this.save();
-            cx.notify();
         })
         .detach();
         cx.subscribe_in(&effort_select, window, |this, _, ev: &SelectEvent<Vec<Choice>>, _, cx| {
-            let SelectEvent::Confirm(Some(effort)) = ev else { return };
-            if let Some(b) = this.bots.get_mut(this.selected) {
-                b.effort = effort.clone();
-                this.save();
-                cx.notify();
+            if let SelectEvent::Confirm(Some(effort)) = ev {
+                this.pick_effort(effort.clone(), cx);
             }
         })
         .detach();
@@ -259,29 +237,7 @@ impl Eggbot {
             }
         })
         .detach();
-        cx.spawn(async move |this, cx| {
-            // first check soon after launch, so runs missed while eggbot was closed happen once
-            let mut wait = Duration::from_secs(3);
-            loop {
-                cx.background_executor().timer(wait).await;
-                let needs_docker = match this.update(cx, |this, _| this.bots.iter().any(|b| !b.busy() && !b.queue.is_empty())) {
-                    Ok(v) => v,
-                    Err(_) => break,
-                };
-                // docker info can block; only ask when a handoff is actually waiting
-                if needs_docker {
-                    let online = cx.background_executor().spawn(async { sandbox::running() }).await;
-                    if this.update(cx, |this, cx| this.pump_queues(online, None, cx)).is_err() {
-                        break;
-                    }
-                }
-                if this.update(cx, |this, cx| this.run_due(cx)).is_err() {
-                    break;
-                }
-                wait = Duration::from_secs(20);
-            }
-        })
-        .detach();
+        Self::start_ticker(cx);
         let p = Palette::apply(window, cx);
         let saved = state::load();
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
@@ -385,18 +341,22 @@ impl Eggbot {
             }
         })
         .detach();
+        this.start_tray(window, cx);
+        this
+    }
+
+    /// The menu bar egg: its menu and notification clicks share one channel, and a timer keeps the icon and menu current.
+    fn start_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (clicks, actions) = async_channel::unbounded();
         notify::init(clicks.clone());
-        this.tray = tray::Tray::new(clicks);
+        self.tray = tray::Tray::new(clicks);
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(action) = actions.recv().await {
                 let done = this.update_in(cx, |this, window, cx| match action {
                     tray::Action::Open => this.show(window, cx),
                     tray::Action::Bot(id) => {
                         this.show(window, cx);
-                        if let Some(i) = this.bots.iter().position(|b| b.id == id) {
-                            this.select(i, window, cx);
-                        }
+                        this.open_bot(id, window, cx);
                     }
                     tray::Action::Quit => this.request_quit(window, cx),
                 });
@@ -421,7 +381,6 @@ impl Eggbot {
             }
         })
         .detach();
-        this
     }
 
     /// The bot with this id. Bots move in the list, so ids are the stable handle.
