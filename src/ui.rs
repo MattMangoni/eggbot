@@ -1785,7 +1785,7 @@ impl Eggbot {
                                 .on_click(cx.listener(move |this, _, window, cx| this.show_room(room_id, window, cx)))
                                 .child(format!("Room · {title}")),
                         )
-                        .child(div().text_color(p.ink).child(text.clone())),
+                        .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(text.clone())),
                 )
             }
             Msg::Bot(t) => div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true)),
@@ -1828,7 +1828,7 @@ impl Eggbot {
                                     .child(button(("continue", i), p).on_click(cx.listener(move |this, _, _, cx| this.continue_chain(id, i, cx))).child("Continue chain"))
                             }),
                     )
-                    .child(div().text_color(p.ink).child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true)))
+                    .child(div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true)))
                     .when(long, |d| {
                         d.child(
                             div()
@@ -1858,7 +1858,7 @@ impl Eggbot {
                     .rounded(px(18.))
                     .bg(p.bubble)
                     .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(if label == "Fresh start" { IconName::RefreshCw } else { IconName::Clock }).size_3()).child(label.clone()))
-                    .child(div().text_color(p.ink).child(prompt.clone())),
+                    .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(prompt.clone())),
             ),
             Msg::SignedIn { provider, prompt } => {
                 let id = bot.id;
