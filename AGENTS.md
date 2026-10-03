@@ -6,7 +6,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 
 - Ask every open question; never decide on Matteo's behalf. Always give a recommendation with the options.
 - Stop at the end of each phase (and on any surprise) and check in before continuing.
-- Simplicity first: no speculative abstractions, fewest files, reuse before writing.
+- Simplicity first: no speculative abstractions, reuse before writing.
 - Record what you learn in `docs/kb/` as you go (decisions, API findings, traps).
 
 ## Commands
@@ -44,6 +44,15 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - Claude access only through the unmodified `claude` binary. Never read, store, or forward Claude OAuth tokens; never call Anthropic endpoints directly. See `docs/kb/auth.md`.
 - Codex access only through the official `codex` CLI (`codex app-server` JSON-RPC, pinned version in the bot image). See `docs/kb/codex.md`.
 - UI stack is `gpui-kit` 0.7 (bundles `gpui-pre` 0.3.7 + `gpui-component`). Import via `gpui_kit::*`, not `gpui::*`.
+
+## File organization
+
+- No god files. Each file has one job you can name in a few words (`composer`, `state.json load and save`). Aim for 200–600 lines.
+- Before you add to a file over 600 lines, split out the part you touch by responsibility first, in its own `refactor:` commit with no behaviour change.
+- New code goes in the file that owns that job. If no file owns it, add one; do not append it to `main.rs` or a view file because it is open.
+- No tiny-file sprawl: no new file under ~80 lines unless it is a natural boundary.
+- At most one folder level (for example `src/ui/`); no `mod.rs` that only re-exports.
+- Tests stay in the same file as the code they test.
 
 ## Conventions
 
