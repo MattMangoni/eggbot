@@ -11,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::theme::hex;
-use super::{TRAFFIC_INSET, bar, button, divider};
+use super::{TRAFFIC_INSET, bar, button, button_off, divider};
 use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
@@ -147,8 +147,7 @@ impl Eggbot {
                 d.child(div().mr_2().flex().items_center().gap_2().text_xs().text_color(p.muted).child("Context").child(bar(used, 40., p, fill)).child(format!("{:.0}%", used.clamp(0., 1.) * 100.)))
             })
             .child(
-                button("fresh", p)
-                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4).cursor_default())
+                (if bot.busy() || !self.may_start(bot.provider) { button_off("fresh", p) } else { button("fresh", p) })
                     .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
                     .child(Icon::new(IconName::RefreshCw).size_3())
                     .child("Fresh start"),
