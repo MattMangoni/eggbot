@@ -579,7 +579,7 @@ impl Eggbot {
                             div()
                                 .id(("unmount", i))
                                 .p_1()
-                                .rounded(px(4.))
+                                .rounded(px(6.))
                                 .text_color(p.muted)
                                 .cursor_pointer()
                                 .invisible()
@@ -671,7 +671,7 @@ impl Eggbot {
             })
             .child(
                 button("fresh", p)
-                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4))
+                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4).cursor_default())
                     .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
                     .child(Icon::new(IconName::RefreshCw).size_3())
                     .child("Fresh start"),
@@ -772,8 +772,8 @@ impl Eggbot {
             .bg(p.ink)
             .text_color(p.bg)
             .cursor_pointer()
-            .when(paused, |d| d.opacity(0.4))
-            .hover(|d| d.opacity(0.8))
+            .when(paused, |d| d.opacity(0.4).cursor_default())
+            .when(!paused, |d| d.hover(|d| d.opacity(0.8)))
             .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
             .child(Icon::new(IconName::ArrowUp).size_4());
         let stop = busy.then(|| {
@@ -846,8 +846,8 @@ impl Eggbot {
                 .border_color(p.line)
                 .text_xs()
                 .text_color(color)
-                .child(Icon::new(IconName::CircleAlert).size_3p5())
-                .child(text)
+                .child(Icon::new(IconName::CircleAlert).size_3p5().flex_none())
+                .child(div().flex_1().min_w_0().child(text))
         });
 
         div()
@@ -1029,13 +1029,20 @@ impl Eggbot {
             }
         };
         let (last, hit) = (ix == bot.msgs.len(), self.find_current() == Some(ix));
+        // more air before a new request, less between consecutive tool lines
+        let top = match (ix.checked_sub(1).and_then(|j| bot.msgs.get(j)), bot.msgs.get(ix)) {
+            (None, _) => 20.,
+            (Some(Msg::Tool { .. }), Some(Msg::Tool { .. })) => 0.,
+            (_, Some(Msg::User(_) | Msg::Kickoff { .. } | Msg::Scheduled { .. } | Msg::Handoff { .. })) => 16.,
+            _ => 8.,
+        };
         // the 8px inset leaves room for the search highlight without moving the text
         div()
             .w_full()
             .flex()
             .justify_center()
             .px_4()
-            .pt(px(if ix == 0 { 20. } else { 8. }))
+            .pt(px(top))
             .when(last, |d| d.pb(px(20.)))
             .child(div().w_full().max_w(px(READ_W + 16.)).px_2().py_1().rounded(px(10.)).when(hit, |d| d.bg(self.p.tint)).child(el))
             .into_any_element()
@@ -1821,7 +1828,7 @@ impl Eggbot {
         let remove = div()
             .id(("unqueue", at))
             .p_1()
-            .rounded(px(4.))
+            .rounded(px(6.))
             .text_color(p.muted)
             .cursor_pointer()
             .hover(|d| d.bg(p.hover).text_color(p.ink))
@@ -1871,7 +1878,7 @@ impl Eggbot {
                                 .on_click(cx.listener(move |this, _, window, cx| this.show_room(room_id, window, cx)))
                                 .child(format!("Room · {title}")),
                         )
-                        .child(div().text_color(p.ink).child(text.clone())),
+                        .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(text.clone())),
                 )
             }
             Msg::Bot(t) => div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("md", bot.id * 100_000 + i), t.clone()).selectable(true)),
@@ -1914,7 +1921,7 @@ impl Eggbot {
                                     .child(button(("continue", i), p).on_click(cx.listener(move |this, _, _, cx| this.continue_chain(id, i, cx))).child("Continue chain"))
                             }),
                     )
-                    .child(div().text_color(p.ink).child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true)))
+                    .child(div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("handoff", bot.id * 100_000 + i), shown).selectable(true)))
                     .when(long, |d| {
                         d.child(
                             div()
@@ -1944,7 +1951,7 @@ impl Eggbot {
                     .rounded(px(18.))
                     .bg(p.bubble)
                     .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(if label == "Fresh start" { IconName::RefreshCw } else { IconName::Clock }).size_3()).child(label.clone()))
-                    .child(div().text_color(p.ink).child(prompt.clone())),
+                    .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(prompt.clone())),
             ),
             Msg::SignedIn { provider, prompt } => {
                 let id = bot.id;
@@ -1986,12 +1993,12 @@ impl Eggbot {
                 .gap_2()
                 .text_sm()
                 .text_color(p.err)
-                .child(Icon::new(IconName::CircleAlert).size_4())
-                .child(t.clone())
-                .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
+                .child(Icon::new(IconName::CircleAlert).size_4().flex_none())
+                .child(div().min_w_0().child(t.clone()))
+                .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().flex_none().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
                 .when(t.contains("/login") || t.contains("codex login"), |d| {
                     let codex = t.contains("codex login");
-                    d.child(button(("sign-in", i), p).ml_2().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
+                    d.child(button(("sign-in", i), p).ml_2().flex_none().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
                 }),
             Msg::Tool { verb, target, detail, open, .. } => {
                 let (id, open) = (bot.id, *open);
@@ -2016,9 +2023,9 @@ impl Eggbot {
                                 }
                                 cx.notify();
                             }))
-                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3())
-                            .child(verb.clone())
-                            .child(div().truncate().font_family("Menlo").child(target.clone())),
+                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3().flex_none())
+                            .child(div().flex_none().child(verb.clone()))
+                            .child(div().min_w_0().truncate().font_family("Menlo").child(target.clone())),
                     )
                     .when(open, |d| d.child(div().ml_5().p_3().rounded(px(8.)).bg(p.bubble).text_xs().font_family("Menlo").text_color(p.muted).whitespace_normal().child(detail)))
             }
