@@ -314,8 +314,8 @@ impl Eggbot {
                 .when(bot.skills.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("No skills yet. Add one below.")))
                 .child(div().flex().flex_col().gap_1().children(rows))
                 .child(divider(p))
-                .child(field(p).child(Input::new(&self.skill_name).appearance(false)))
-                .child(field(p).child(Textarea::new(&self.skill_body).appearance(false)))
+                .child(div().flex().flex_col().gap_1().child(label("Name", p)).child(field(p).child(Input::new(&self.skill_name).appearance(false))))
+                .child(div().flex().flex_col().gap_1().child(label("Instructions", p)).child(field(p).child(Textarea::new(&self.skill_body).appearance(false))))
                 .child(
                     div()
                         .flex()
@@ -398,14 +398,22 @@ impl Eggbot {
                 .when(wait && !bot.schedules.is_empty(), |d| d.child(div().text_xs().text_color(note_color).child("Due runs wait here instead of starting, and go once the meter drops.")))
                 .child(div().flex().flex_col().gap_2().children(rows))
                 .child(divider(p))
-                .child(field(p).child(Input::new(&self.sched_prompt).appearance(false)))
+                .child(div().flex().flex_col().gap_1().child(label("Task", p)).child(field(p).child(Input::new(&self.sched_prompt).appearance(false))))
                 .child(
                     div()
                         .flex()
-                        .items_center()
+                        .items_end()
                         .gap_1()
-                        .children(kinds)
-                        .child(field(p).w(px(90.)).ml_2().child(Input::new(&self.sched_value).appearance(false)))
+                        .child(div().flex().flex_col().gap_1().child(label("Repeat", p)).child(div().flex().items_center().gap_1().children(kinds)))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .ml_2()
+                                .child(label(["At", "At", "Hours", "Minutes"][self.sched_kind.min(3)], p))
+                                .child(field(p).w(px(90.)).child(Input::new(&self.sched_value).appearance(false))),
+                        )
                         .child(div().flex_1())
                         .child(primary("add-schedule", p).on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx))).child("Add")),
                 )
