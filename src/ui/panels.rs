@@ -10,10 +10,11 @@ use gpui_kit::*;
 
 use super::{button, field, heading, link, primary};
 use crate::app::bot::{Bot, SHELLS};
+use crate::app::setup::{Check, Setup};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Check, Setup, hex, login, sandbox};
+use crate::{hex, login, sandbox};
 
 impl Eggbot {
     /// The first-run checklist: each row turns green on its own as the checks pass.
