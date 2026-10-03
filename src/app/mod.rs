@@ -16,6 +16,7 @@ pub(crate) mod bot;
 mod panels;
 pub(crate) mod setup;
 pub(crate) mod state;
+mod turns;
 
 /// The one panel open above the main pane. Settings shows in every view; the others need a bot chat.
 #[derive(Clone, Copy, PartialEq)]
