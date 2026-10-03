@@ -13,6 +13,7 @@ use crate::claude::{Meter, Provider};
 use crate::{Appearance, Choice, Palette, codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
 
 pub(crate) mod bot;
+mod chat;
 mod handoffs;
 mod panels;
 mod rooms;
