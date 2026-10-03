@@ -49,6 +49,10 @@ pub(crate) struct Saved {
     pub(crate) next_group_id: usize,
     #[serde(default)]
     pub(crate) groups: Vec<group::Group>,
+    #[serde(default)]
+    pub(crate) rooms_collapsed: bool,
+    #[serde(default)]
+    pub(crate) groups_collapsed: bool,
 }
 
 pub(crate) fn default_sidebar() -> f32 {
@@ -133,6 +137,7 @@ impl Eggbot {
         (self.bots, self.next_id, self.meters, self.sidebar_w, self.sidebar_open, self.shared, self.throttle, self.pause) =
             (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
         (self.rooms, self.next_room_id, self.groups, self.next_group_id) = (s.rooms, s.next_room_id, s.groups, s.next_group_id);
+        (self.rooms_collapsed, self.groups_collapsed) = (s.rooms_collapsed, s.groups_collapsed);
     }
 
     pub(crate) fn save(&self) {
@@ -140,7 +145,7 @@ impl Eggbot {
             return;
         }
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups });
+        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups, "rooms_collapsed": self.rooms_collapsed, "groups_collapsed": self.groups_collapsed });
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));

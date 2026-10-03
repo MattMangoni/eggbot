@@ -85,6 +85,9 @@ pub(crate) struct Eggbot {
     pub(crate) sidebar_w: f32,
     /// Bot list visible. The width is kept while it is closed.
     pub(crate) sidebar_open: bool,
+    /// The Rooms and Groups lists are folded to their titles.
+    pub(crate) rooms_collapsed: bool,
+    pub(crate) groups_collapsed: bool,
     pub(crate) appearance: Appearance,
     /// Shown under the composer when adding a folder is refused.
     pub(crate) folder_error: Option<String>,
@@ -291,6 +294,8 @@ impl Eggbot {
             selects_stale: true,
             sidebar_w: default_sidebar(),
             sidebar_open: default_sidebar_open(),
+            rooms_collapsed: false,
+            groups_collapsed: false,
             appearance,
             folder_error: None,
             active: false,
