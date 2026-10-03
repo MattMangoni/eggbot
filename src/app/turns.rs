@@ -10,7 +10,7 @@ use super::bot::{Bot, Msg, reply_text};
 use super::state::{SHARED, data_dir};
 use crate::claude::Provider;
 use crate::memory::Update;
-use crate::{claude, codex, group, handoff, memory, room, sandbox, skills, usage};
+use crate::{claude, codex, group, handoff, memory, room, sandbox, skills};
 
 const FRESH_START: &str = "We are about to start a fresh session. Update /memory/NOTES.md with short bullets worth keeping (Facts, Preferences, Lessons — no chat logs), or end with one <eggbot-learn> block. Then reply with one short line.";
 
@@ -24,7 +24,7 @@ impl Eggbot {
         }
         let (id, provider, busy) = (bot.id, bot.provider, bot.busy());
         // a paused send stays in the box, so a window that resets overnight does not fire a draft
-        if self.breach_of(provider).is_some_and(|b| b.level == usage::Level::Pause) {
+        if self.paused(provider) {
             cx.notify();
             return;
         }

@@ -6,7 +6,7 @@ use gpui_kit::*;
 
 use super::Eggbot;
 use super::bot::Msg;
-use crate::{handoff, room, sandbox, usage};
+use crate::{handoff, room, sandbox};
 
 impl Eggbot {
     /// Drops one message the user queued. `at` indexes the bot's whole queue; other kinds of queued work stay.
@@ -135,7 +135,7 @@ impl Eggbot {
     pub(crate) fn continue_chain(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
         let Some(bot) = self.bot(id) else { return };
         // the hop button does not override a full plan window; the banner says why
-        if self.breach_of(bot.provider).is_some_and(|b| b.level == usage::Level::Pause) {
+        if self.paused(bot.provider) {
             cx.notify();
             return;
         }

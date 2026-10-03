@@ -92,7 +92,7 @@ impl Eggbot {
     pub(crate) fn composer(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let busy = bot.busy();
-        let paused = self.breach_of(bot.provider).is_some_and(|b| b.level == usage::Level::Pause);
+        let paused = self.paused(bot.provider);
         let send = div()
             .id("send")
             .size(px(32.))

@@ -51,7 +51,7 @@ impl Eggbot {
     /// Moves due schedules onto a bot when the guard allows. Held ones keep their anchor, so they stay due.
     pub(crate) fn release_schedules(&mut self, cx: &mut Context<Self>) -> bool {
         let now = chrono::Local::now();
-        let levels = [Provider::Claude, Provider::Codex].map(|p| (p, self.breach_of(p).map(|b| b.level).unwrap_or(usage::Level::Ok)));
+        let levels = [Provider::Claude, Provider::Codex].map(|p| (p, self.level(p)));
         let mut taken: Vec<Provider> = self.bots.iter().filter(|b| b.busy()).map(|b| b.provider).collect();
         for b in &self.bots {
             if !b.queue.is_empty() && !taken.contains(&b.provider) {
@@ -88,13 +88,14 @@ impl Eggbot {
 
     pub(crate) fn set_meter(&mut self, meter: Meter, cx: &mut Context<Self>) {
         let provider = meter.provider;
-        let before = self.breach_of(provider).map(|b| b.level);
+        let before = self.level(provider);
         self.meters.retain(|m| m.provider != meter.provider);
         self.meters.push(meter);
         self.meters.sort_by_key(|m| m.provider.label());
-        let after = self.breach_of(provider);
-        if after.as_ref().is_some_and(|b| b.level == usage::Level::Pause) && before != Some(usage::Level::Pause) {
-            self.announce_pause(provider, after.as_ref().unwrap());
+        if before != usage::Level::Pause
+            && let Some(breach) = self.breach_of(provider).filter(|b| b.level == usage::Level::Pause)
+        {
+            self.announce_pause(provider, &breach);
         }
         self.release_schedules(cx);
         self.resume_queues(cx);
@@ -112,17 +113,26 @@ impl Eggbot {
         self.meters.iter().find(|m| m.provider == provider).and_then(|m| usage::breach(&m.windows, now, self.throttle, self.pause))
     }
 
+    fn level(&self, provider: Provider) -> usage::Level {
+        self.breach_of(provider).map_or(usage::Level::Ok, |b| b.level)
+    }
+
+    /// No new turn of this provider starts; the one already running finishes.
+    pub(crate) fn paused(&self, provider: Provider) -> bool {
+        self.level(provider) == usage::Level::Pause
+    }
+
     /// Pause blocks every new turn. Throttle blocks a second bot of the same provider.
     pub(crate) fn may_start(&self, provider: Provider) -> bool {
-        match self.breach_of(provider).map(|b| b.level) {
-            Some(usage::Level::Pause) => false,
-            Some(usage::Level::Throttle) => !self.bots.iter().any(|b| b.provider == provider && b.busy()),
-            _ => true,
+        match self.level(provider) {
+            usage::Level::Pause => false,
+            usage::Level::Throttle => !self.bots.iter().any(|b| b.provider == provider && b.busy()),
+            usage::Level::Ok => true,
         }
     }
 
     fn guard_levels(&self) -> [usage::Level; 2] {
-        [Provider::Claude, Provider::Codex].map(|p| self.breach_of(p).map(|b| b.level).unwrap_or(usage::Level::Ok))
+        [Provider::Claude, Provider::Codex].map(|p| self.level(p))
     }
 
     /// Due schedules of this bot are sitting out a throttle or a pause.
