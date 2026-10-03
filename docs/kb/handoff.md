@@ -1,6 +1,6 @@
 # Handoff between bots
 
-Code: `src/handoff.rs` (pure: mention parsing, roster, prompt, queue resume; `cargo test`), wiring in `src/main.rs` (`start_turn`, `deliver`, `hand_off`, `continue_chain`, `restore_handoffs`, `pump_queues`, `Ev::Done` arm).
+Code: `src/handoff.rs` (pure: mention parsing, roster, prompt, queue resume; `cargo test`), wiring in `src/app/turns.rs` (`start_turn`, the `Ev::Done` arm of `apply`), `src/app/handoffs.rs` (`deliver`, `hand_off`, `continue_chain`, `pump_queues`), and `src/app/state.rs` (`Saved::migrate` puts an in-flight hop back on load).
 
 - Every turn's role prompt lists the other bots (`handoff::roster`): name, specialty blurb, and when to call them. `@Name` only when that specialty fits the next step better than doing the work yourself — not to narrate, acknowledge, or think out loud. Writing `@Name` anywhere still sends the whole reply.
 - The same text lists up to four recent successful handoffs (`Bot.recent`, newest first; a paused chain is not recorded; a deleted bot is left out) and, for each room the bot is in, that room's peers. Prefer those peers for the room's work. There is still no lead or dispatcher.
@@ -29,7 +29,7 @@ Observed 2026-09-30 (live test): casual mentions ("@Implementer got my message")
 
 ## Rooms
 
-Code: `src/room.rs` (roster edits, kickoff prompt, transcript; `cargo test`), wiring in `src/main.rs` (`start_room`, `show_room`, `log_reply`, `hand_off`).
+Code: `src/room.rs` (roster edits, kickoff prompt, transcript; `cargo test`), wiring in `src/app/rooms.rs` (`start_room`, `show_room`) and `src/app/handoffs.rs` (`hand_off`, `log_room`).
 
 A room is not a new kind of bot. It stores a title, a kickoff, bot ids, and a transcript in `state.json`, plus which member is the facilitator and whether the room is unread.
 

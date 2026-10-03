@@ -15,7 +15,7 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 ## Theme
 
 - `Theme::update(cx, |t| { t.background = ..; })` — fields come from `ThemeColor` via Deref. Use `update`, not `global_mut`, so copies and windows stay in sync (it also re-installs markdown TextView colors).
-- Dark mode: `Theme::sync_system_appearance(Some(window), cx)` first (it reloads stock colors), then our colors in a separate `Theme::update`. Re-run on `cx.observe_window_appearance(window, ..)`. See `Palette::apply` in `src/main.rs`.
+- Dark mode: `Theme::sync_system_appearance(Some(window), cx)` first (it reloads stock colors), then our colors in a separate `Theme::update`. Re-run on `cx.observe_window_appearance(window, ..)`. See `Palette::apply` in `src/ui/theme.rs`.
 
 ## Input
 
@@ -75,13 +75,13 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 
 ## Dropdowns
 
-- `component::select::{Select, SelectState, SelectEvent, SelectItem}`. Custom item = struct implementing `SelectItem` (`type Value`, `title()`, `value()`); see `Choice` in `src/main.rs`.
+- `component::select::{Select, SelectState, SelectEvent, SelectItem}`. Custom item = struct implementing `SelectItem` (`type Value`, `title()`, `value()`); see `Choice` in `src/ui/composer.rs`.
 - `SelectState::new(Vec<Item>, None, window, cx)`; refill with `set_items(items, window, cx)` + `set_selected_value(&v, window, cx)` (both need `window`, so eggbot refills in `render` when `selects_stale`).
 - Listen with `cx.subscribe_in(&state, window, |this, _, ev: &SelectEvent<Vec<Item>>, _, cx| …)`; `SelectEvent::Confirm(Some(value))`.
 
 ## Traps (2026-10-01)
 
-- Setting `.hover(..)` twice on one element panics: "hover style already set" (div.rs:843). Helpers that set hover (`button()` in `src/ui.rs`) must not get a second `.hover`; use a separate helper (`primary()`).
+- Setting `.hover(..)` twice on one element panics: "hover style already set" (div.rs:843). Helpers that set hover (`button()` in `src/ui/mod.rs`) must not get a second `.hover`; use a separate helper (`primary()`).
 - A lazy `.map(..)` iterator of children that captures `cx` must be `.collect()`ed before `cx` is used again in the same builder chain.
 - gpui-component's window root paints `theme.background` over the whole window. For a see-through window set `Theme.background = transparent_black()` and paint the opaque areas yourself.
 - `WindowBackgroundAppearance::Blurred` did nothing on macOS 27. Use `Transparent` plus a native `NSVisualEffectView` (material `Sidebar`, blending `BehindWindow`) inserted below GPUI's NSView (`add_vibrancy` in `src/main.rs`). Get the NSView via `raw_window_handle::HasWindowHandle::window_handle(window)` — call it as a trait function, because GPUI's own `Window::window_handle()` shadows it.
@@ -98,11 +98,11 @@ Source to read when unsure: `~/.cargo/registry/src/index.crates.io-*/gpui-pre-0.
 - objc2-foundation hides `NSAppleEventDescriptor.eventID` / `paramDescriptorForKeyword` behind the large `objc2-core-services` feature; a raw `msg_send!` avoids it.
 - System Events keystrokes go to whatever app is in front: set eggbot frontmost in the same osascript call, or test text lands in the terminal.
 - Test tools: `sips -c H W --cropOffset` crops around the centre here, not from the offset; scale whole captures with `sips -Z` instead. Bring eggbot frontmost before a CGEvent click, or it lands on the terminal.
-- Chat = `list(ListState, render_item)`: only visible rows (plus overdraw) are rendered, and visible rows are re-measured every frame, so streaming text needs no `remeasure`. Only added/removed rows need `splice` (`Eggbot::sync_list`, run in render; a bot switch does `reset`). `ListAlignment::Bottom` + `FollowMode::Tail` keeps the view at the end while you stay there; `scroll_to_end` when a turn starts. Rendering every message in one scroll div cost 50–95% CPU at 3,000 messages (re-layout on every caret blink); the list is ~2%.
+- Chat = `list(ListState, render_item)`: only visible rows (plus overdraw) are rendered, and visible rows are re-measured every frame, so streaming text needs no `remeasure`. Only added/removed rows need `splice` (`Eggbot::sync_list` in `src/app/chat.rs`, run in render; a bot switch does `reset`). `ListAlignment::Bottom` + `FollowMode::Tail` keeps the view at the end while you stay there; `scroll_to_end` when a turn starts. Rendering every message in one scroll div cost 50–95% CPU at 3,000 messages (re-layout on every caret blink); the list is ~2%.
 - Markdown `TextView` parses texts ≤ 4 KB synchronously (exact first layout) and larger ones in the background; its state is keyed by element id, so a row that scrolls away is parsed again when it returns.
 - Drag and drop: `on_drag(value, preview)` + `on_drop`. The dragged value inside GPUI is private, so the view stores what is dragged itself (set in the preview constructor through a weak entity). `group_drag_over` styles apply only to elements that have a hitbox, and it does not create one: add a no-op `group_hover` to the line element.
 - Jumping to an older row in a `FollowMode::Tail` list: call `pause_following_tail()` before `scroll_to_reveal_item`, or the next layout snaps back to the end. Following resumes when the user scrolls back to the bottom.
-- Hiding the sidebar leaves the traffic lights over the chat top bar. That row needs the same left inset as the sidebar header (`TRAFFIC_INSET` in `src/ui.rs`).
+- Hiding the sidebar leaves the traffic lights over the chat top bar. That row needs the same left inset as the sidebar header (`TRAFFIC_INSET` in `src/ui/mod.rs`).
 - `Popover` (gpui-component) needs a `Selectable` trigger such as `Button`; it handles outside clicks and Esc. Its `content` closure runs in the popover's own context, so it reaches the view through a weak entity, and `state.dismiss(window, cx)` closes it.
 - Text fields bind `escape` in their own key context and call `cx.propagate()` when they have nothing to dismiss, so a global `escape` binding still fires from inside a panel field.
 - Edition 2024: a method returning `impl IntoElement` captures `cx`. Turn it into an `AnyElement` before keeping it in a `let` while `cx` is used again.
