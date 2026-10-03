@@ -437,6 +437,23 @@ impl Eggbot {
         this
     }
 
+    /// The bot with this id. Bots move in the list, so ids are the stable handle.
+    pub(crate) fn bot(&self, id: usize) -> Option<&Bot> {
+        self.bots.iter().find(|b| b.id == id)
+    }
+
+    pub(crate) fn bot_mut(&mut self, id: usize) -> Option<&mut Bot> {
+        self.bots.iter_mut().find(|b| b.id == id)
+    }
+
+    pub(crate) fn room(&self, id: usize) -> Option<&room::Room> {
+        self.rooms.iter().find(|r| r.id == id)
+    }
+
+    pub(crate) fn room_mut(&mut self, id: usize) -> Option<&mut room::Room> {
+        self.rooms.iter_mut().find(|r| r.id == id)
+    }
+
     fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         set_dock_icon(true);
         cx.activate(true);

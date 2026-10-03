@@ -133,7 +133,7 @@ impl Eggbot {
     /// A room's own dot is its transcript, not every message a member receives.
     pub(crate) fn alert(&mut self, id: usize, title: &str, body: &str) {
         let seeing = self.open_room.is_none() && self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id);
-        if !seeing && let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+        if !seeing && let Some(b) = self.bot_mut(id) {
             b.unread = true;
         }
         if !self.active {

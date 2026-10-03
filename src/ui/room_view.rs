@@ -19,7 +19,7 @@ impl Eggbot {
     pub(crate) fn room_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let Some(id) = self.open_room else { return div().flex_1().into_any_element() };
-        let Some((title, started, has_log)) = self.rooms.iter().find(|r| r.id == id).map(|r| (r.title.clone(), r.started, !r.transcript.is_empty())) else {
+        let Some((title, started, has_log)) = self.room(id).map(|r| (r.title.clone(), r.started, !r.transcript.is_empty())) else {
             return div().flex_1().into_any_element();
         };
         let reading = has_log || !self.room_live(id).is_empty();
@@ -89,9 +89,7 @@ impl Eggbot {
     fn room_setup(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let Some(room_id) = self.open_room else { return div().into_any_element() };
-        let Some((title, kickoff, members, facilitator, started)) =
-            self.rooms.iter().find(|r| r.id == room_id).map(|r| (r.title.clone(), r.kickoff.clone(), r.members.clone(), r.facilitator, r.started))
-        else {
+        let Some((title, kickoff, members, facilitator, started)) = self.room(room_id).map(|r| (r.title.clone(), r.kickoff.clone(), r.members.clone(), r.facilitator, r.started)) else {
             return div().into_any_element();
         };
         let why = crate::room::block(&title, &kickoff, &members, facilitator);
@@ -186,7 +184,7 @@ impl Eggbot {
     fn room_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(id) = self.open_room else { return div().into_any_element() };
         let live = self.room_live(id);
-        let Some((ev, n)) = self.rooms.iter().find(|r| r.id == id).map(|r| (r.transcript.get(ix).cloned(), r.transcript.len() + live.len())) else {
+        let Some((ev, n)) = self.room(id).map(|r| (r.transcript.get(ix).cloned(), r.transcript.len() + live.len())) else {
             return div().into_any_element();
         };
         let transcript_len = n - live.len();
@@ -294,7 +292,7 @@ impl Eggbot {
     /// The reply streaming into a member's chat for this room. It is not saved on the room until the turn ends.
     fn room_live_row(&self, bot_id: usize) -> AnyElement {
         let p = self.p;
-        let Some(bot) = self.bots.iter().find(|b| b.id == bot_id) else { return div().into_any_element() };
+        let Some(bot) = self.bot(bot_id) else { return div().into_any_element() };
         let text = crate::app::bot::reply_text(&bot.msgs, bot.reply_from);
         let body = if text.trim().is_empty() {
             div().text_sm().text_color(p.muted).child(bot.status.clone().unwrap_or_else(|| "Thinking…".into())).into_any_element()

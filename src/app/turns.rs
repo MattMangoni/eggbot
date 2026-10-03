@@ -32,7 +32,7 @@ impl Eggbot {
             self.deliver(id, handoff::Pending::typed(text), cx);
             return;
         }
-        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
+        if let Some(bot) = self.bot_mut(id) {
             bot.msgs.push(Msg::User(text.clone()));
         }
         self.start_turn(id, handoff::Pending::user(text), cx);
@@ -40,11 +40,10 @@ impl Eggbot {
 
     /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
     pub(crate) fn start_turn(&mut self, id: usize, mut pending: handoff::Pending, cx: &mut Context<Self>) {
-        let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };
-        let busy = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy());
+        let Some((provider, busy)) = self.bot(id).map(|b| (b.provider, b.busy())) else { return };
         // never drop a hop: if the guard closed, put it back at the front of the saved queue
         if busy || !self.may_start(provider) {
-            if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
+            if let Some(bot) = self.bot_mut(id) {
                 bot.queue.insert(0, pending);
             }
             self.save();
@@ -52,7 +51,7 @@ impl Eggbot {
             return;
         }
         let roster_bots: Vec<(usize, String, String)> = self.bots.iter().map(|b| (b.id, b.name.clone(), b.blurb())).collect();
-        let stored = self.bots.iter().find(|b| b.id == id).map(|b| b.recent.clone()).unwrap_or_default();
+        let stored = self.bot(id).map(|b| b.recent.clone()).unwrap_or_default();
         let alive: Vec<&str> = roster_bots.iter().filter(|(i, ..)| *i != id).map(|(_, name, _)| name.as_str()).collect();
         let recent = handoff::recent(&stored, &alive, 4);
         let room_peers: Vec<(String, Vec<String>)> = self
@@ -82,7 +81,7 @@ impl Eggbot {
         let acting_room = pending.room.and_then(|rid| self.rooms.iter().find(|r| r.id == rid && r.members.contains(&id)).map(|r| (r.id, r.title.clone())));
         let sole_room = self.rooms.iter().filter(|r| r.members.contains(&id)).count() == 1;
         let room_body = acting_room.as_ref().map(|(rid, _)| std::fs::read_to_string(room::notes_file(&data_dir(), *rid)).unwrap_or_default()).unwrap_or_default();
-        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        let Some(bot) = self.bot_mut(id) else { return };
         let (hops, fresh) = (pending.hops, pending.fresh);
         let prompt = pending.prompt.clone();
         bot.stopped = false;
@@ -282,7 +281,7 @@ impl Eggbot {
                     _ => {}
                 }
                 // over the limit: leave the persisted queue alone
-                let next = if !engine_down && self.may_start(provider) { self.bots.iter_mut().find(|b| b.id == id).and_then(|b| (!b.queue.is_empty()).then(|| b.queue.remove(0))) } else { None };
+                let next = if !engine_down && self.may_start(provider) { self.bot_mut(id).and_then(|b| (!b.queue.is_empty()).then(|| b.queue.remove(0))) } else { None };
                 if let Some(pending) = next {
                     self.start_turn(id, pending, cx);
                 }
@@ -312,12 +311,12 @@ impl Eggbot {
     }
 
     pub(crate) fn send_again(&mut self, id: usize, i: usize, cx: &mut Context<Self>) {
-        let Some(bot) = self.bots.iter().find(|b| b.id == id) else { return };
+        let Some(bot) = self.bot(id) else { return };
         if bot.busy() || !self.may_start(bot.provider) {
             cx.notify();
             return;
         }
-        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        let Some(bot) = self.bot_mut(id) else { return };
         if let Some(Msg::SignedIn { prompt, .. }) = bot.msgs.get_mut(i)
             && let Some(text) = prompt.take()
         {

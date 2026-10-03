@@ -244,7 +244,7 @@ impl Eggbot {
                                 .cursor_pointer()
                                 .hover(|d| d.text_color(p.ink))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(Msg::Handoff { open, .. }) = this.bots.iter_mut().find(|b| b.id == id).and_then(|b| b.msgs.get_mut(i)) {
+                                    if let Some(Msg::Handoff { open, .. }) = this.bot_mut(id).and_then(|b| b.msgs.get_mut(i)) {
                                         *open = !*open;
                                     }
                                     cx.notify();
@@ -346,7 +346,7 @@ impl Eggbot {
                             .cursor_pointer()
                             .hover(|d| d.text_color(p.ink))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(Msg::Tool { open, .. }) = this.bots.iter_mut().find(|b| b.id == id).and_then(|b| b.msgs.get_mut(i)) {
+                                if let Some(Msg::Tool { open, .. }) = this.bot_mut(id).and_then(|b| b.msgs.get_mut(i)) {
                                     *open = !*open;
                                 }
                                 cx.notify();

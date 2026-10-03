@@ -15,7 +15,7 @@ impl Eggbot {
             self.room_list_for = None;
             return;
         };
-        let n = self.rooms.iter().find(|r| r.id == id).map(|r| r.transcript.len()).unwrap_or(0);
+        let n = self.room(id).map(|r| r.transcript.len()).unwrap_or(0);
         let count = n + self.room_live(id).len();
         if self.room_list_for != Some(id) {
             self.room_list_for = Some(id);
@@ -51,11 +51,11 @@ impl Eggbot {
         if self.open_room == Some(id) {
             return;
         }
-        let Some(room) = self.rooms.iter().find(|r| r.id == id) else { return };
+        let Some(room) = self.room(id) else { return };
         let (title, kickoff) = (room.title.clone(), room.kickoff.clone());
         self.leave_group();
         self.leave_room();
-        if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+        if let Some(room) = self.room_mut(id) {
             room.unread = false;
         }
         self.open_room = Some(id);
@@ -91,7 +91,7 @@ impl Eggbot {
     fn write_room(&mut self, title: bool, cx: &mut Context<Self>) {
         let Some(id) = self.open_room else { return };
         let value = if title { self.room_title.read(cx).value().to_string() } else { self.room_kickoff.read(cx).value().to_string() };
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) else { return };
+        let Some(room) = self.room_mut(id) else { return };
         if title {
             room.title = value;
         } else {
@@ -103,7 +103,7 @@ impl Eggbot {
     }
 
     pub(crate) fn toggle_member(&mut self, room_id: usize, bot_id: usize, cx: &mut Context<Self>) {
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        let Some(room) = self.room_mut(room_id) else { return };
         (room.members, room.facilitator) = room::toggle(std::mem::take(&mut room.members), room.facilitator, bot_id);
         (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
         self.save();
@@ -111,7 +111,7 @@ impl Eggbot {
     }
 
     pub(crate) fn set_facilitator(&mut self, room_id: usize, bot_id: usize, cx: &mut Context<Self>) {
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
+        let Some(room) = self.room_mut(room_id) else { return };
         (room.members, room.facilitator) = room::facilitate(std::mem::take(&mut room.members), bot_id);
         (self.room_error, self.room_status) = (None, None);
         self.save();
@@ -214,7 +214,7 @@ impl Eggbot {
     /// Sends the kickoff to the facilitator only. Peers join later through `@Name`.
     pub(crate) fn start_room(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.open_room else { return };
-        let Some(room) = self.rooms.iter().find(|r| r.id == id) else { return };
+        let Some(room) = self.room(id) else { return };
         let title = room.title.trim().to_string();
         let kickoff = room.kickoff.trim().to_string();
         if let Some(why) = room::block(&title, &kickoff, &room.members, room.facilitator) {
@@ -228,19 +228,19 @@ impl Eggbot {
         let peers: Vec<(String, String)> = self.bots.iter().filter(|b| b.id != facilitator && members.contains(&b.id)).map(|b| (b.name.clone(), b.blurb())).collect();
         let peer_refs: Vec<room::Peer<'_>> = peers.iter().map(|(name, blurb)| room::Peer { name, blurb }).collect();
         let prompt = room::prompt(&title, &kickoff, &peer_refs);
-        let Some(name) = self.bots.iter().find(|b| b.id == facilitator).map(|b| b.name.clone()) else {
+        let Some(name) = self.bot(facilitator).map(|b| b.name.clone()) else {
             self.room_error = Some("That facilitator was deleted".into());
             cx.notify();
             return;
         };
-        let facilitator_bot = self.bots.iter().find(|b| b.id == facilitator);
+        let facilitator_bot = self.bot(facilitator);
         let (busy, queued, provider) = facilitator_bot.map(|b| (b.busy(), !b.queue.is_empty(), b.provider)).unwrap_or((false, false, Provider::Claude));
         // deliver() is the only door: pause, throttle, and a busy bot all stay on the persisted queue
         let held = !self.may_start(provider);
-        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == facilitator) {
+        if let Some(bot) = self.bot_mut(facilitator) {
             bot.msgs.push(Msg::Kickoff { room_id: id, room: title, text: kickoff.clone(), prompt: prompt.clone() });
         }
-        if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
+        if let Some(room) = self.room_mut(id) {
             room.record_kickoff(facilitator, &name, &kickoff);
             room.started = true;
             room.unread = false;

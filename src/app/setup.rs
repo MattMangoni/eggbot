@@ -192,7 +192,7 @@ impl Eggbot {
         cx.spawn(async move |this, cx| {
             if let Err(e) = opening.await {
                 this.update(cx, |this, cx| {
-                    if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
+                    if let Some(b) = this.bot_mut(id) {
                         b.msgs.push(Msg::Error(format!("Could not open the sign-in: {e}")));
                     }
                     cx.notify();

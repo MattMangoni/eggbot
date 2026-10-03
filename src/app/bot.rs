@@ -329,7 +329,7 @@ impl Eggbot {
             }
             this.update(cx, |this, cx| {
                 let show = this.bots.get(this.selected).is_some_and(|b| b.id == id);
-                if let Some(b) = this.bots.iter_mut().find(|b| b.id == id) {
+                if let Some(b) = this.bot_mut(id) {
                     let err = sandbox::add_mounts(&mut b.folders, &paths).err();
                     if show {
                         this.folder_error = err;
@@ -344,7 +344,7 @@ impl Eggbot {
     }
 
     pub(crate) fn remove_folder(&mut self, id: usize, index: usize, cx: &mut Context<Self>) {
-        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id)
+        if let Some(bot) = self.bot_mut(id)
             && index < bot.folders.len()
         {
             bot.folders.remove(index);

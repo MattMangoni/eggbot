@@ -254,7 +254,7 @@ impl Eggbot {
         let rows = self.rooms.iter().map(|r| {
             let id = r.id;
             let on = self.open_room == Some(id);
-            let fac = r.facilitator.and_then(|fid| self.bots.iter().find(|b| b.id == fid));
+            let fac = r.facilitator.and_then(|fid| self.bot(fid));
             let subtitle = match (fac, r.members.len()) {
                 (Some(b), n) if n > 1 => format!("{} + {}", b.name, n - 1),
                 (Some(b), _) => b.name.clone(),
@@ -283,7 +283,7 @@ impl Eggbot {
         let rows = self.groups.iter().map(|g| {
             let id = g.id;
             let on = self.open_group == Some(id);
-            let names: Vec<String> = g.members.iter().filter_map(|bid| self.bots.iter().find(|b| b.id == *bid).map(|b| b.name.clone())).collect();
+            let names: Vec<String> = g.members.iter().filter_map(|bid| self.bot(*bid).map(|b| b.name.clone())).collect();
             let subtitle = match names.as_slice() {
                 [] => "No bots yet".to_string(),
                 [one] => one.clone(),
