@@ -1,6 +1,6 @@
 # Schedules
 
-Code: `src/schedule.rs` (pure time logic, `cargo test`), wiring in `src/main.rs` (`run_due`, `add_schedule`, `remove_schedule`, clock panel `schedules()`).
+Code: `src/schedule.rs` (pure time logic, `cargo test`), wiring in `src/app/schedules.rs` (`start_ticker`, `run_due`, `release_schedules`), `src/app/panels.rs` (`add_schedule`, `remove_schedule`), and the clock panel `schedules()` in `src/ui/panels.rs`.
 
 - Stored per bot in `state.json` (`Bot.schedules`): prompt, `Repeat` (Daily / Weekdays at HH:MM, every N hours, every N minutes), `anchor` = unix time of the last run (or creation).
 - `next_run = repeat.next(anchor)` in local time; weekdays skip Sat/Sun.

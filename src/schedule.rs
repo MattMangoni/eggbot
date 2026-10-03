@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Duration, Local, NaiveTime, TimeZone, Timelike,
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
-pub enum Repeat {
+pub(crate) enum Repeat {
     Daily { hour: u32, minute: u32 },
     Weekdays { hour: u32, minute: u32 },
     Hours(u32),
@@ -12,17 +12,17 @@ pub enum Repeat {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Schedule {
-    pub id: usize,
-    pub prompt: String,
-    pub repeat: Repeat,
+pub(crate) struct Schedule {
+    pub(crate) id: usize,
+    pub(crate) prompt: String,
+    pub(crate) repeat: Repeat,
     /// Unix seconds of the last run, or of creation before the first run.
-    pub anchor: i64,
+    pub(crate) anchor: i64,
 }
 
 impl Repeat {
     /// Parses the form value: "09:00" for daily/weekdays, a number ≥ 1 for hours/minutes.
-    pub fn parse(kind: usize, value: &str) -> Result<Self, &'static str> {
+    pub(crate) fn parse(kind: usize, value: &str) -> Result<Self, &'static str> {
         let value = value.trim();
         match kind {
             0 | 1 => {
@@ -37,7 +37,7 @@ impl Repeat {
         }
     }
 
-    pub fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         match *self {
             Repeat::Daily { hour, minute } => format!("Every day at {hour:02}:{minute:02}"),
             Repeat::Weekdays { hour, minute } => format!("Weekdays at {hour:02}:{minute:02}"),
@@ -49,7 +49,7 @@ impl Repeat {
     }
 
     /// The first run time strictly after `after`.
-    pub fn next<Tz: TimeZone>(&self, after: DateTime<Tz>) -> DateTime<Tz> {
+    pub(crate) fn next<Tz: TimeZone>(&self, after: DateTime<Tz>) -> DateTime<Tz> {
         let at_time = |hour, minute, weekdays_only: bool| {
             let mut day = after.date_naive();
             loop {
@@ -74,12 +74,12 @@ impl Repeat {
 }
 
 impl Schedule {
-    pub fn next_run(&self) -> DateTime<Local> {
+    pub(crate) fn next_run(&self) -> DateTime<Local> {
         self.repeat.next(Local.timestamp_opt(self.anchor, 0).unwrap())
     }
 
     /// Due at most once, however many runs were missed; the caller moves `anchor` to now.
-    pub fn due(&self, now: DateTime<Local>) -> bool {
+    pub(crate) fn due(&self, now: DateTime<Local>) -> bool {
         self.next_run() <= now
     }
 }

@@ -3,13 +3,13 @@
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-pub enum Action {
+pub(crate) enum Action {
     Open,
     Bot(usize),
     Quit,
 }
 
-pub struct Tray {
+pub(crate) struct Tray {
     icon: TrayIcon,
     /// Still, wobble left, wobble right, still with an unread dot.
     frames: [Icon; 4],
@@ -20,14 +20,9 @@ pub struct Tray {
 
 impl Tray {
     /// Menu clicks go to `tx`.
-    pub fn new(tx: async_channel::Sender<Action>) -> Option<Self> {
+    pub(crate) fn new(tx: async_channel::Sender<Action>) -> Option<Self> {
         let frames = [egg_icon(0., false), egg_icon(-0.2, false), egg_icon(0.2, false), egg_icon(0., true)];
-        let icon = TrayIconBuilder::new()
-            .with_icon_templated(frames[0].clone())
-            .with_tooltip("eggbot")
-            .build()
-            .map_err(|e| eprintln!("eggbot: no menu bar icon: {e}"))
-            .ok()?;
+        let icon = TrayIconBuilder::new().with_icon_templated(frames[0].clone()).with_tooltip("eggbot").build().map_err(|e| eprintln!("eggbot: no menu bar icon: {e}")).ok()?;
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let action = match e.id.0.as_str() {
                 "open" => Action::Open,
@@ -45,7 +40,7 @@ impl Tray {
     }
 
     /// Called on a timer: wobbles the egg while any bot works and refreshes the menu when needed.
-    pub fn update(&mut self, bots: Vec<(usize, String, bool, bool)>, tick: usize) {
+    pub(crate) fn update(&mut self, bots: Vec<(usize, String, bool, bool)>, tick: usize) {
         let busy = bots.iter().any(|b| b.2);
         let frame = match (busy, bots.iter().any(|b| b.3)) {
             (true, _) => 1 + tick % 2,
