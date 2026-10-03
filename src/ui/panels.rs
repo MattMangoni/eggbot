@@ -402,9 +402,9 @@ impl Eggbot {
                 .child(
                     div()
                         .flex()
-                        .items_end()
                         .gap_1()
-                        .child(div().flex().flex_col().gap_1().child(label("Repeat", p)).child(div().flex().items_center().gap_1().children(kinds)))
+                        // the chips fill the height of the time field, so both centre on the same line
+                        .child(div().flex().flex_col().gap_1().child(label("Repeat", p)).child(div().flex_1().flex().items_center().gap_1().children(kinds)))
                         .child(
                             div()
                                 .flex()
@@ -415,7 +415,7 @@ impl Eggbot {
                                 .child(field(p).w(px(90.)).child(Input::new(&self.sched_value).appearance(false))),
                         )
                         .child(div().flex_1())
-                        .child(primary("add-schedule", p).on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx))).child("Add")),
+                        .child(primary("add-schedule", p).self_end().on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx))).child("Add")),
                 )
                 .when(self.sched_kind == 3, |d| d.child(label("Short intervals use your plan limit quickly.", p)))
                 .when_some(self.sched_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e))),
