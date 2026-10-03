@@ -27,7 +27,7 @@ use gpui_kit::component::Theme;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
+actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, Dismiss, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
 
 /// ⌘1…⌘9 selects the bot at that position.
 #[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -506,6 +506,16 @@ fn default_pause() -> f32 {
     usage::DEFAULT_PAUSE
 }
 
+/// The one panel open above the main pane. Settings shows in every view; the others need a bot chat.
+#[derive(Clone, Copy, PartialEq)]
+enum Panel {
+    None,
+    Settings,
+    Editor,
+    Schedules,
+    Skills,
+}
+
 struct Eggbot {
     p: Palette,
     bots: Vec<Bot>,
@@ -527,22 +537,19 @@ struct Eggbot {
     codex_query: Option<Option<String>>,
     tray: Option<tray::Tray>,
     input: Entity<TextareaState>,
-    sched_open: bool,
+    panel: Panel,
     /// 0 daily, 1 weekdays, 2 every N hours, 3 every N minutes
     sched_kind: usize,
     sched_prompt: Entity<InputState>,
     sched_value: Entity<InputState>,
     sched_error: Option<String>,
-    skills_open: bool,
     skill_name: Entity<InputState>,
     skill_body: Entity<TextareaState>,
     /// Index of the skill the form is editing. None means the form adds a new one.
     skill_at: Option<usize>,
     skill_error: Option<String>,
-    edit_open: bool,
     edit_name: Entity<InputState>,
     edit_role: Entity<TextareaState>,
-    settings_open: bool,
     edit_shared: Entity<TextareaState>,
     shared: Option<String>,
     limit_throttle: Entity<InputState>,
@@ -758,7 +765,7 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, sched_open: false, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skills_open: false, skill_name, skill_body, skill_at: None, skill_error: None, edit_open: false, edit_name, edit_role, edit_error: None, settings_open: false, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None, groups: vec![], next_group_id: 0, open_group: None, group_title, confirm_delete_group: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, panel: Panel::None, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skill_name, skill_body, skill_at: None, skill_error: None, edit_name, edit_role, edit_error: None, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None, groups: vec![], next_group_id: 0, open_group: None, group_title, confirm_delete_group: None };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
         match saved {
@@ -917,7 +924,7 @@ impl Eggbot {
     fn hatch(&mut self, preset: usize) {
         self.leave_room();
         self.leave_group();
-        self.skills_open = false;
+        self.panel = Panel::None;
         self.skill_at = None;
         let base = PRESETS[preset].name;
         let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
@@ -969,10 +976,7 @@ impl Eggbot {
         self.selects_stale = true;
         self.menu_open = false;
         self.confirm_delete = None;
-        self.edit_open = false;
-        self.sched_open = false;
-        self.skills_open = false;
-        self.settings_open = false;
+        self.panel = Panel::None;
         self.folder_error = None;
         (self.find_open, self.find_hits) = (false, vec![]);
         self.list.scroll_to_end();
@@ -989,7 +993,7 @@ impl Eggbot {
         let (throttle, pause) = (usage::percent(self.throttle).to_string(), usage::percent(self.pause).to_string());
         self.limit_throttle.update(cx, |s, cx| s.set_value(throttle, window, cx));
         self.limit_pause.update(cx, |s, cx| s.set_value(pause, window, cx));
-        (self.settings_open, self.edit_open, self.sched_open, self.skills_open, self.login_error, self.settings_error) = (true, false, false, false, None, None);
+        (self.panel, self.login_error, self.settings_error) = (Panel::Settings, None, None);
         cx.notify();
     }
 
@@ -1004,7 +1008,7 @@ impl Eggbot {
         };
         self.shared = (text != SHARED).then_some(text);
         (self.throttle, self.pause) = (throttle, pause);
-        (self.settings_open, self.settings_error) = (false, None);
+        (self.panel, self.settings_error) = (Panel::None, None);
         self.save();
         // a looser limit can let held schedules and queued turns go
         self.release_schedules(cx);
@@ -1511,10 +1515,7 @@ impl Eggbot {
             s.focus(window, cx);
         });
         self.edit_role.update(cx, |s, cx| s.set_value(role, window, cx));
-        self.edit_open = true;
-        self.sched_open = false;
-        self.skills_open = false;
-        self.settings_open = false;
+        self.panel = Panel::Editor;
         self.edit_error = None;
         self.selects_stale = true;
         if self.bots[self.selected].provider == Provider::Codex && self.codex_models.is_empty() && self.codex_query != Some(None) {
@@ -1539,7 +1540,7 @@ impl Eggbot {
         {
             bot.name = name;
             bot.role = (role != bot.preset().role).then_some(role);
-            self.edit_open = false;
+            self.panel = Panel::None;
             self.save();
             self.input.update(cx, |s, cx| s.focus(window, cx));
         }
@@ -1555,12 +1556,26 @@ impl Eggbot {
     }
 
     fn toggle_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.skills_open = !self.skills_open;
-        (self.sched_open, self.settings_open, self.edit_open) = (false, false, false);
-        if self.skills_open {
+        self.panel = if self.panel == Panel::Skills { Panel::None } else { Panel::Skills };
+        if self.panel == Panel::Skills {
             self.clear_skill_form(window, cx);
             self.skill_name.update(cx, |s, cx| s.focus(window, cx));
         }
+        cx.notify();
+    }
+
+    fn toggle_schedules(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = if self.panel == Panel::Schedules { Panel::None } else { Panel::Schedules };
+        self.sched_error = None;
+        if self.panel == Panel::Schedules {
+            self.sched_prompt.update(cx, |s, cx| s.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = Panel::None;
+        self.focus_main(window, cx);
         cx.notify();
     }
 
@@ -1821,7 +1836,7 @@ impl Eggbot {
         }
         self.open_room = Some(id);
         (self.room_error, self.room_status, self.confirm_delete_room) = (None, None, None);
-        (self.menu_open, self.edit_open, self.sched_open, self.skills_open, self.settings_open) = (false, false, false, false, false);
+        (self.menu_open, self.panel) = (false, Panel::None);
         (self.find_open, self.find_hits) = (false, vec![]);
         self.room_title.update(cx, |s, cx| {
             s.set_value(title, window, cx);
@@ -1910,7 +1925,7 @@ impl Eggbot {
         self.leave_room();
         self.open_group = Some(id);
         self.confirm_delete_group = None;
-        (self.menu_open, self.edit_open, self.sched_open, self.skills_open, self.settings_open) = (false, false, false, false, false);
+        (self.menu_open, self.panel) = (false, Panel::None);
         (self.find_open, self.find_hits) = (false, vec![]);
         self.group_title.update(cx, |s, cx| {
             s.set_value(title, window, cx);
@@ -2250,7 +2265,7 @@ impl Eggbot {
         }
         let unknown = Check::Unknown;
         self.setup = Some(Setup { engine: unknown.clone(), running: unknown.clone(), image: unknown.clone(), claude: unknown.clone(), codex: unknown });
-        (self.settings_open, self.edit_open, self.sched_open, self.skills_open) = (false, false, false, false);
+        self.panel = Panel::None;
         cx.notify();
         // re-check every few seconds while the checklist is open; installs and sign-ins finish outside eggbot
         cx.spawn(async move |this, cx| {
@@ -2504,7 +2519,8 @@ fn main() {
             // ⌘[ / ⌘] are outdent/indent inside text fields, so switching uses ⌃Tab
             KeyBinding::new("ctrl-shift-tab", PrevBot, None),
             KeyBinding::new("ctrl-tab", NextBot, None),
-            KeyBinding::new("escape", StopTurn, None),
+            KeyBinding::new("escape", Dismiss, None),
+            KeyBinding::new("cmd-.", StopTurn, None),
             KeyBinding::new("cmd-shift-d", CycleAppearance, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-f", Find, None),
