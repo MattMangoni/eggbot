@@ -51,7 +51,7 @@ impl Eggbot {
             // new messages go before the typing row
             self.list.splice(old - 1..old - 1, count - old);
         } else if count < old {
-            // ponytail: removals are assumed at the tail (empty replies, quiet runs); reset if middle removals appear
+            // ponytail: removals are assumed in the running turn (empty replies, quiet runs, learn blocks); reset if older rows get removed
             self.list.splice(count - 1..old - 1, 0);
         }
     }
