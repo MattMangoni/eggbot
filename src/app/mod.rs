@@ -15,6 +15,7 @@ use crate::{Appearance, Choice, Palette, codex, group, notify, room, sandbox, se
 pub(crate) mod bot;
 mod handoffs;
 mod panels;
+mod rooms;
 mod schedules;
 pub(crate) mod setup;
 pub(crate) mod state;
