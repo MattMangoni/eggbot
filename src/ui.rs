@@ -579,7 +579,7 @@ impl Eggbot {
                             div()
                                 .id(("unmount", i))
                                 .p_1()
-                                .rounded(px(4.))
+                                .rounded(px(6.))
                                 .text_color(p.muted)
                                 .cursor_pointer()
                                 .invisible()
@@ -671,7 +671,7 @@ impl Eggbot {
             })
             .child(
                 button("fresh", p)
-                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4))
+                    .when(bot.busy() || !self.may_start(bot.provider), |d| d.opacity(0.4).cursor_default())
                     .on_click(cx.listener(|this, _, _, cx| this.fresh_start(cx)))
                     .child(Icon::new(IconName::RefreshCw).size_3())
                     .child("Fresh start"),
@@ -772,8 +772,8 @@ impl Eggbot {
             .bg(p.ink)
             .text_color(p.bg)
             .cursor_pointer()
-            .when(paused, |d| d.opacity(0.4))
-            .hover(|d| d.opacity(0.8))
+            .when(paused, |d| d.opacity(0.4).cursor_default())
+            .when(!paused, |d| d.hover(|d| d.opacity(0.8)))
             .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
             .child(Icon::new(IconName::ArrowUp).size_4());
         let stop = busy.then(|| {
@@ -1742,7 +1742,7 @@ impl Eggbot {
         let remove = div()
             .id(("unqueue", at))
             .p_1()
-            .rounded(px(4.))
+            .rounded(px(6.))
             .text_color(p.muted)
             .cursor_pointer()
             .hover(|d| d.bg(p.hover).text_color(p.ink))
