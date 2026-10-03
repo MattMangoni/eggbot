@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::{TRAFFIC_INSET, bar, soft_shadow};
 use crate::app::Eggbot;
-use crate::app::bot::PRESETS;
+use crate::app::bot::{PRESETS, drop_index};
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
 use crate::ui::theme::{Palette, hex};
@@ -24,10 +24,10 @@ const DROP_LINE: u32 = 0x0A84FF;
 impl Eggbot {
     pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
-        let me = cx.entity().downgrade();
+        let (me, len) = (cx.entity().downgrade(), self.bots.len());
         // a bot dropped on row `i` lands just above it; the line shows only where that changes the order
         let drop_line = move |group: SharedString, before: usize, from: Option<usize>| {
-            let noop = from.is_some_and(|f| before == f || before == f + 1);
+            let noop = from.is_some_and(|f| drop_index(len, f, before).is_none());
             div().absolute().left_1().right_1().top(px(-ROW_GAP / 2. - 1.)).h(px(2.)).rounded_full().when(!noop, |d| {
                 // GPUI applies group drag styles only to elements with a hitbox; a no-op group hover adds one
                 d.group_hover(group.clone(), |s| s).group_drag_over::<DraggedBot>(group, |s| s.bg(hex(DROP_LINE)))

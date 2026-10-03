@@ -2,6 +2,7 @@
 
 use gpui_kit::*;
 
+use super::bot::Msg;
 use super::{Eggbot, Panel};
 use crate::notify;
 
@@ -76,11 +77,8 @@ impl Eggbot {
 
     /// Matches the query (any case) against the open chat and jumps to the newest match.
     pub(crate) fn find_update(&mut self, cx: &mut Context<Self>) {
-        let query = self.find_input.read(cx).value().trim().to_lowercase();
-        self.find_hits = match self.bots.get(self.selected) {
-            Some(bot) if !query.is_empty() => bot.msgs.iter().enumerate().filter(|(_, m)| m.searchable().is_some_and(|t| t.to_lowercase().contains(&query))).map(|(i, _)| i).collect(),
-            _ => vec![],
-        };
+        let query = self.find_input.read(cx).value().to_string();
+        self.find_hits = self.bots.get(self.selected).map(|bot| find_hits(&bot.msgs, &query)).unwrap_or_default();
         self.find_at = self.find_hits.len().saturating_sub(1);
         self.find_reveal(cx);
     }
@@ -88,7 +86,7 @@ impl Eggbot {
     /// Moves to the previous (-1) or next (1) match, wrapping around.
     pub(crate) fn find_step(&mut self, dir: isize, cx: &mut Context<Self>) {
         if !self.find_hits.is_empty() {
-            self.find_at = (self.find_at as isize + dir).rem_euclid(self.find_hits.len() as isize) as usize;
+            self.find_at = wrap(self.find_at, dir, self.find_hits.len());
             self.find_reveal(cx);
         }
     }
@@ -150,5 +148,40 @@ impl Eggbot {
         } else {
             self.input.update(cx, |s, cx| s.focus(window, cx));
         }
+    }
+}
+
+/// Messages that contain `query` in any case, oldest first. Tool output is not searched.
+fn find_hits(msgs: &[Msg], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return vec![];
+    }
+    msgs.iter().enumerate().filter(|(_, m)| m.searchable().is_some_and(|t| t.to_lowercase().contains(&query))).map(|(i, _)| i).collect()
+}
+
+/// One step through `len` matches, wrapping at both ends.
+fn wrap(at: usize, dir: isize, len: usize) -> usize {
+    (at as isize + dir).rem_euclid(len as isize) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
+    use core::prelude::v1::test;
+
+    #[test]
+    fn search_matches_what_was_written_and_wraps() {
+        let msgs = vec![
+            Msg::User("Fix the Login page".into()),
+            Msg::Tool { id: "t".into(), verb: "Read".into(), target: "login.rs".into(), detail: "login".into(), open: false },
+            Msg::Bot("The login form is fixed.".into()),
+            Msg::Scheduled { prompt: "check login".into(), label: "Every hour".into() },
+        ];
+        assert_eq!(find_hits(&msgs, "  LOGIN "), [0, 2, 3]);
+        assert!(find_hits(&msgs, "   ").is_empty());
+        assert_eq!(wrap(0, -1, 3), 2);
+        assert_eq!(wrap(2, 1, 3), 0);
     }
 }

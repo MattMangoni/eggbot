@@ -89,12 +89,7 @@ impl Eggbot {
         let role = self.edit_role.read(cx).value().trim().to_string();
         let Some(id) = self.bots.get(self.selected).map(|b| b.id) else { return };
         let taken = self.bots.iter().any(|b| b.id != id && b.name.eq_ignore_ascii_case(&name));
-        self.edit_error = match () {
-            _ if name.is_empty() || name.chars().count() > 24 => Some("Use a name of 1 to 24 characters".into()),
-            _ if taken => Some("Another bot already has this name (@mentions need unique names)".into()),
-            _ if role.is_empty() => Some("Write a role, even a short one".into()),
-            _ => None,
-        };
+        self.edit_error = edit_error(&name, &role, taken).map(String::from);
         if self.edit_error.is_none()
             && let Some(bot) = self.bots.get_mut(self.selected)
         {
@@ -186,5 +181,34 @@ impl Eggbot {
         }
         self.save();
         cx.notify();
+    }
+}
+
+/// Why the editor cannot save. `taken` means another bot has this name in any case, which would break @mentions.
+fn edit_error(name: &str, role: &str, taken: bool) -> Option<&'static str> {
+    if name.is_empty() || name.chars().count() > 24 {
+        Some("Use a name of 1 to 24 characters")
+    } else if taken {
+        Some("Another bot already has this name (@mentions need unique names)")
+    } else if role.is_empty() {
+        Some("Write a role, even a short one")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
+    use core::prelude::v1::test;
+
+    #[test]
+    fn the_editor_needs_a_unique_short_name_and_a_role() {
+        assert_eq!(edit_error("Reviewer", "Reads diffs.", false), None);
+        assert_eq!(edit_error("", "Reads diffs.", false), Some("Use a name of 1 to 24 characters"));
+        assert_eq!(edit_error(&"n".repeat(25), "Reads diffs.", false), Some("Use a name of 1 to 24 characters"));
+        assert!(edit_error("Reviewer", "Reads diffs.", true).is_some_and(|e| e.contains("@mentions")));
+        assert_eq!(edit_error("Reviewer", "", false), Some("Write a role, even a short one"));
     }
 }

@@ -103,6 +103,15 @@ pub(crate) fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap()
 }
 
+/// Where a bot dragged from row `from` lands when dropped above row `before` (`before` = len: the end).
+/// None when nothing would change: onto itself, just below itself, or out of range.
+pub(crate) fn drop_index(len: usize, from: usize, before: usize) -> Option<usize> {
+    if from >= len || before > len || before == from || before == from + 1 {
+        return None;
+    }
+    Some(if before > from { before - 1 } else { before })
+}
+
 impl Msg {
     /// The text search looks in: what people and bots wrote, not tool output.
     pub(crate) fn searchable(&self) -> Option<&str> {
@@ -255,12 +264,10 @@ impl Eggbot {
     pub(crate) fn move_bot(&mut self, from: usize, before: usize, cx: &mut Context<Self>) {
         self.dragging = None;
         cx.notify();
-        if from >= self.bots.len() || before > self.bots.len() || before == from || before == from + 1 {
-            return;
-        }
+        let Some(at) = drop_index(self.bots.len(), from, before) else { return };
         let selected = self.bots[self.selected].id;
         let bot = self.bots.remove(from);
-        self.bots.insert(if before > from { before - 1 } else { before }, bot);
+        self.bots.insert(at, bot);
         self.selected = self.bots.iter().position(|b| b.id == selected).unwrap_or(0);
         self.save();
         cx.notify();
@@ -385,5 +392,16 @@ mod tests {
         let taken = ["Reviewer", "Reviewer 2"];
         assert_eq!(unique_name("Reviewer", |n| taken.contains(&n)), "Reviewer 3");
         assert_eq!(unique_name("Group", |n| n == "Group 2"), "Group");
+    }
+
+    #[test]
+    fn a_dropped_bot_lands_above_the_row_under_the_pointer() {
+        assert_eq!(drop_index(3, 0, 2), Some(1));
+        assert_eq!(drop_index(3, 2, 0), Some(0));
+        // the space below the list moves it to the end
+        assert_eq!(drop_index(3, 0, 3), Some(2));
+        assert_eq!(drop_index(3, 1, 1), None);
+        assert_eq!(drop_index(3, 1, 2), None);
+        assert_eq!(drop_index(3, 3, 0), None);
     }
 }
