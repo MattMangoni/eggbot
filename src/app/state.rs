@@ -87,7 +87,7 @@ pub(crate) fn load() -> Loaded {
     load_from(&data_dir(), now)
 }
 
-/// Reads `dir/state.json`; a file that does not parse moves to `state.json.bad`, or `state.json.bad-<now>` if that is taken.
+/// Reads `dir/state.json`; a file that does not parse moves to `state.json.bad`, or the first free `state.json.bad-<now>[-n]`.
 fn load_from(dir: &Path, now: u64) -> Loaded {
     let path = dir.join("state.json");
     let read = match std::fs::read(&path) {
@@ -98,8 +98,11 @@ fn load_from(dir: &Path, now: u64) -> Loaded {
         return Loaded::Saved(s);
     }
     let mut bad = dir.join("state.json.bad");
-    if bad.exists() {
-        bad = dir.join(format!("state.json.bad-{now}"));
+    let mut n = 0;
+    // rename silently replaces an existing file, so never pick a taken name
+    while bad.exists() {
+        bad = dir.join(if n == 0 { format!("state.json.bad-{now}") } else { format!("state.json.bad-{now}-{n}") });
+        n += 1;
     }
     match std::fs::rename(&path, &bad) {
         Ok(()) => Loaded::BackedUp(bad),
@@ -111,23 +114,32 @@ fn load_from(dir: &Path, now: u64) -> Loaded {
 }
 
 impl Saved {
-    /// A file without bots, rooms, or groups hatches the starter bots instead.
+    /// A file without bots, rooms, or groups keeps its settings and hatches the starter bots.
     pub(crate) fn has_content(&self) -> bool {
         !self.bots.is_empty() || !self.rooms.is_empty() || !self.groups.is_empty()
     }
 
-    /// Brings an older file up to date: a single `folder` becomes a mount, the next room and group ids
+    /// Brings an older file up to date: a single `folder` becomes a mount, the next bot, room, and group ids
     /// clear every saved id, and an in-flight `@Name` hop goes back on its queue (user turns and schedules stay stopped).
     fn migrate(&mut self) {
         for b in &mut self.bots {
             sandbox::adopt_legacy(&mut b.folders, b.folder.take());
             b.queue = handoff::restore(b.current.take(), std::mem::take(&mut b.queue));
         }
+        let used = self.bots.iter().map(|b| b.id.saturating_add(1)).max().unwrap_or(0);
+        self.next_id = self.next_id.max(used);
         let used = self.rooms.iter().map(|r| r.id.saturating_add(1)).max().unwrap_or(0);
         self.next_room_id = self.next_room_id.max(used);
         let used = self.groups.iter().map(|g| g.id.saturating_add(1)).max().unwrap_or(0);
         self.next_group_id = self.next_group_id.max(used);
     }
+}
+
+/// The `state.json` object, read from any value with `Saved`'s field names (`Eggbot` or `Saved`).
+macro_rules! saved_json {
+    ($s:expr) => {
+        serde_json::json!({ "next_id": $s.next_id, "bots": $s.bots, "meters": $s.meters, "sidebar_w": $s.sidebar_w, "sidebar_open": $s.sidebar_open, "appearance": $s.appearance, "shared": $s.shared, "throttle": $s.throttle, "pause": $s.pause, "next_room_id": $s.next_room_id, "rooms": $s.rooms, "next_group_id": $s.next_group_id, "groups": $s.groups, "rooms_collapsed": $s.rooms_collapsed, "groups_collapsed": $s.groups_collapsed })
+    };
 }
 
 impl Eggbot {
@@ -145,7 +157,7 @@ impl Eggbot {
             return;
         }
         let dir = data_dir();
-        let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups, "rooms_collapsed": self.rooms_collapsed, "groups_collapsed": self.groups_collapsed });
+        let state = saved_json!(self);
         // write then rename, so a crash mid-write never loses the history
         let tmp = dir.join("state.json.tmp");
         let ok = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, state.to_string())).and_then(|_| std::fs::rename(&tmp, dir.join("state.json")));
@@ -212,7 +224,7 @@ mod tests {
         assert_eq!(saved.bots[0].current.as_ref().map(|p| p.prompt.as_str()), Some("look"));
         assert_eq!(saved.bots[0].folders[0].name, "proj");
         // same keys save() writes; queue, current, and folders ride inside bots
-        let state = serde_json::json!({ "next_id": saved.next_id, "bots": saved.bots, "meters": saved.meters, "sidebar_w": saved.sidebar_w, "sidebar_open": saved.sidebar_open, "appearance": saved.appearance, "shared": saved.shared, "throttle": saved.throttle, "pause": saved.pause, "next_room_id": saved.next_room_id, "rooms": saved.rooms, "next_group_id": saved.next_group_id, "groups": saved.groups });
+        let state = saved_json!(saved);
         let again: Saved = serde_json::from_value(state).unwrap();
         assert_eq!(again.bots[0].queue[0].prompt, "ship it");
         assert_eq!(again.bots[0].current.as_ref().unwrap().hops, 1);
@@ -317,8 +329,30 @@ mod tests {
         assert!(first.current.is_none());
         // a user turn that was running stays stopped
         assert!(saved.bots[1].queue.is_empty() && saved.bots[1].current.is_none());
-        assert_eq!((saved.next_room_id, saved.next_group_id), (5, 8));
+        assert_eq!((saved.next_id, saved.next_room_id, saved.next_group_id), (3, 5, 8));
         assert!(!Saved::default().has_content());
+
+        // a next_id at or below a saved bot id moves past it, so a new bot never reuses an id
+        let mut low: Saved = serde_json::from_str(r#"{"next_id":1,"bots":[{"id":5,"name":"A","preset":0,"msgs":[]},{"id":2,"name":"B","preset":0,"msgs":[]}]}"#).unwrap();
+        low.migrate();
+        assert_eq!(low.next_id, 6);
+    }
+
+    #[test]
+    fn save_writes_every_saved_key() {
+        let keys = |v: serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        let saved = Saved::default();
+        assert_eq!(keys(saved_json!(saved)), keys(serde_json::to_value(&saved).unwrap()));
+    }
+
+    #[test]
+    fn an_empty_state_json_keeps_its_settings() {
+        let raw = r#"{"next_id":9,"bots":[],"meters":[{"provider":"Claude","windows":[{"label":"5h","used":0.5,"reset":100}],"at":50}],"sidebar_w":310.0,"sidebar_open":false,"appearance":"Dark","shared":"Be brief.","throttle":0.75,"pause":0.875,"next_room_id":4,"rooms":[],"next_group_id":6,"groups":[],"rooms_collapsed":true,"groups_collapsed":false}"#;
+        let mut saved: Saved = serde_json::from_str(raw).unwrap();
+        assert!(!saved.has_content());
+        saved.migrate();
+        // restore() takes every field, then startup hatches the starter bots from next_id
+        assert_eq!(saved_json!(saved), serde_json::from_str::<serde_json::Value>(raw).unwrap());
     }
 
     #[test]
@@ -343,10 +377,22 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("state.json.bad")).unwrap(), "{broken");
         assert_eq!(std::fs::read_to_string(dir.join("state.json.bad-7")).unwrap(), "{again");
 
-        // a non-empty directory at the target makes the rename fail; the file stays where it was
-        std::fs::create_dir_all(dir.join("state.json.bad-8/x")).unwrap();
+        // a taken timestamp gets a counter; no backup is replaced
+        std::fs::write(&state, "{third").unwrap();
+        assert!(matches!(load_from(&dir, 7), Loaded::BackedUp(p) if p == dir.join("state.json.bad-7-1")));
+        std::fs::write(&state, "{fourth").unwrap();
+        assert!(matches!(load_from(&dir, 7), Loaded::BackedUp(p) if p == dir.join("state.json.bad-7-2")));
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad-7")).unwrap(), "{again");
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad-7-1")).unwrap(), "{third");
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad-7-2")).unwrap(), "{fourth");
+
+        // a read-only directory makes the rename fail; the file stays where it was
+        use std::os::unix::fs::PermissionsExt;
         std::fs::write(&state, "{stuck").unwrap();
-        assert!(matches!(load_from(&dir, 8), Loaded::Stuck));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let stuck = matches!(load_from(&dir, 8), Loaded::Stuck);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(stuck);
         assert_eq!(std::fs::read_to_string(&state).unwrap(), "{stuck");
         let _ = std::fs::remove_dir_all(dir);
     }

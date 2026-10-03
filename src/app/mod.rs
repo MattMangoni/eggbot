@@ -329,14 +329,15 @@ impl Eggbot {
         };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
-        match saved {
-            Some(s) if s.has_content() => this.restore(s),
-            _ => {
-                for i in 0..3 {
-                    this.hatch(i);
-                }
-                this.selected = 0;
+        let starters = !saved.as_ref().is_some_and(state::Saved::has_content);
+        if let Some(s) = saved {
+            this.restore(s);
+        }
+        if starters {
+            for i in 0..3 {
+                this.hatch(i);
             }
+            this.selected = 0;
         }
         if let (Some(t), Some(b)) = (notice, this.bots.first_mut()) {
             b.msgs.push(Msg::Error(t));
