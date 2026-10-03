@@ -37,6 +37,33 @@ impl Setup {
     }
 }
 
+impl Check {
+    /// The row after one more check: passed is Ok; a running action or its error stays until the check passes.
+    fn after(&self, passed: bool) -> Check {
+        match (self, passed) {
+            (_, true) => Check::Ok,
+            (Check::Busy(_) | Check::Failed(_), false) => self.clone(),
+            _ => Check::Missing,
+        }
+    }
+}
+
+/// The error asks the user to sign in to `provider` (Claude says `/login`, Codex says `codex login`).
+pub(crate) fn needs_login(error: &str, provider: Provider) -> bool {
+    error.contains(if provider == Provider::Codex { "codex login" } else { "/login" })
+}
+
+/// Turns the latest "not signed in" error for `provider` into a green notice that can send its prompt again.
+fn mark_signed_in(msgs: &mut [Msg], provider: Provider) {
+    let Some(k) = msgs.iter().rposition(|m| matches!(m, Msg::Error(t) if needs_login(t, provider))) else { return };
+    let prompt = msgs[..k].iter().rev().find_map(|m| match m {
+        Msg::User(t) => Some(t.clone()),
+        Msg::Handoff { prompt, .. } | Msg::Scheduled { prompt, .. } | Msg::Kickoff { prompt, .. } => Some(prompt.clone()),
+        _ => None,
+    });
+    msgs[k] = Msg::SignedIn { provider, prompt };
+}
+
 impl Eggbot {
     /// The login finishes in Terminal; check every 5 s for 5 minutes and tell the user when it works.
     fn watch_sign_in(&mut self, provider: Provider, cx: &mut Context<Self>) {
@@ -63,15 +90,8 @@ impl Eggbot {
 
     /// Turns each bot's latest "not signed in" error for `provider` into a green notice with "Send again".
     fn signed_in(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        let marker = if provider == Provider::Codex { "codex login" } else { "/login" };
         for bot in &mut self.bots {
-            let Some(k) = bot.msgs.iter().rposition(|m| matches!(m, Msg::Error(t) if t.contains(marker))) else { continue };
-            let prompt = bot.msgs[..k].iter().rev().find_map(|m| match m {
-                Msg::User(t) => Some(t.clone()),
-                Msg::Handoff { prompt, .. } | Msg::Scheduled { prompt, .. } | Msg::Kickoff { prompt, .. } => Some(prompt.clone()),
-                _ => None,
-            });
-            bot.msgs[k] = Msg::SignedIn { provider, prompt };
+            mark_signed_in(&mut bot.msgs, provider);
         }
         if provider == Provider::Codex {
             self.codex_query = None;
@@ -133,16 +153,11 @@ impl Eggbot {
                 let after = cx
                     .background_executor()
                     .spawn(async move {
-                        let ok = |c: &Check, now: bool| match (c, now) {
-                            (_, true) => Check::Ok,
-                            (Check::Busy(_) | Check::Failed(_), false) => c.clone(),
-                            _ => Check::Missing,
-                        };
-                        let engine = ok(&before.engine, sandbox::installed());
-                        let running = ok(&before.running, engine == Check::Ok && sandbox::running());
-                        let image = ok(&before.image, running == Check::Ok && sandbox::image_ready());
+                        let engine = before.engine.after(sandbox::installed());
+                        let running = before.running.after(engine == Check::Ok && sandbox::running());
+                        let image = before.image.after(running == Check::Ok && sandbox::image_ready());
                         // sign-in checks start a container, so they stop once they pass
-                        let signed = |c: &Check, check: &dyn Fn() -> bool| if *c == Check::Ok { Check::Ok } else { ok(c, image == Check::Ok && check()) };
+                        let signed = |c: &Check, check: &dyn Fn() -> bool| if *c == Check::Ok { Check::Ok } else { c.after(image == Check::Ok && check()) };
                         let claude = signed(&before.claude, &sandbox::claude_signed_in);
                         let codex = signed(&before.codex, &|| codex::account().is_ok());
                         Setup { engine, running, image, claude, codex }
@@ -201,5 +216,41 @@ impl Eggbot {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
+    use core::prelude::v1::test;
+
+    #[test]
+    fn a_setup_row_keeps_its_action_until_the_check_passes() {
+        assert!(Check::Unknown.after(true) == Check::Ok);
+        assert!(Check::Unknown.after(false) == Check::Missing);
+        assert!(Check::Busy("Building…").after(false) == Check::Busy("Building…"));
+        assert!(Check::Failed("no brew".into()).after(false) == Check::Failed("no brew".into()));
+        assert!(Check::Failed("no brew".into()).after(true) == Check::Ok);
+    }
+
+    #[test]
+    fn signing_in_turns_the_latest_error_into_send_again() {
+        let claude = "Not logged in · Please run /login";
+        let mut msgs = vec![
+            Msg::User("first".into()),
+            Msg::Error(claude.into()),
+            Msg::Scheduled { prompt: "nightly".into(), label: "Every day at 09:00".into() },
+            Msg::Error(claude.into()),
+            Msg::Error(crate::codex::NOT_SIGNED_IN.into()),
+        ];
+        assert!(needs_login(claude, Provider::Claude) && !needs_login(claude, Provider::Codex));
+        mark_signed_in(&mut msgs, Provider::Claude);
+        assert!(matches!(&msgs[3], Msg::SignedIn { provider: Provider::Claude, prompt: Some(p) } if p == "nightly"));
+        // an older error, and the other provider's, stay as they were
+        assert!(matches!(&msgs[1], Msg::Error(_)) && matches!(&msgs[4], Msg::Error(_)));
+        let mut unrelated = vec![Msg::Error("boom".into())];
+        mark_signed_in(&mut unrelated, Provider::Codex);
+        assert!(matches!(&unrelated[0], Msg::Error(_)));
     }
 }

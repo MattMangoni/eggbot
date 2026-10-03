@@ -10,6 +10,7 @@ use gpui_kit::*;
 
 use super::{READ_W, button};
 use crate::app::bot::{Bot, Msg};
+use crate::app::setup::needs_login;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::egg::{Mood, egg};
@@ -320,8 +321,8 @@ impl Eggbot {
                 .child(Icon::new(IconName::CircleAlert).size_4().flex_none())
                 .child(div().min_w_0().child(t.clone()))
                 .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().flex_none().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
-                .when(t.contains("/login") || t.contains("codex login"), |d| {
-                    let codex = t.contains("codex login");
+                .when(needs_login(t, Provider::Claude) || needs_login(t, Provider::Codex), |d| {
+                    let codex = needs_login(t, Provider::Codex);
                     d.child(button(("sign-in", i), p).ml_2().flex_none().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex {
                         "Sign in to Codex"
                     } else {

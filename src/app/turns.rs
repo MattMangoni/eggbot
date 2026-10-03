@@ -56,18 +56,9 @@ impl Eggbot {
         let stored = self.bot(id).map(|b| b.recent.clone()).unwrap_or_default();
         let alive: Vec<&str> = roster_bots.iter().filter(|(i, ..)| *i != id).map(|(_, name, _)| name.as_str()).collect();
         let recent = handoff::recent(&stored, &alive, 4);
-        let room_peers: Vec<(String, Vec<String>)> = self
-            .rooms
-            .iter()
-            .filter(|r| r.members.contains(&id))
-            .map(|r| {
-                let peers: Vec<String> = roster_bots.iter().filter(|(bid, _, _)| *bid != id && r.members.contains(bid)).map(|(_, name, _)| name.clone()).collect();
-                (r.title.clone(), peers)
-            })
-            .filter(|(_, peers)| !peers.is_empty())
-            .collect();
-        let room_names: Vec<Vec<&str>> = room_peers.iter().map(|(_, peers)| peers.iter().map(String::as_str).collect()).collect();
-        let room_refs: Vec<(&str, &[&str])> = room_peers.iter().zip(&room_names).map(|((title, _), peers)| (title.as_str(), peers.as_slice())).collect();
+        let names: Vec<(usize, &str)> = roster_bots.iter().map(|(i, name, _)| (*i, name.as_str())).collect();
+        let room_peers = room::peers(&self.rooms, &names, id);
+        let room_refs: Vec<(&str, &[&str])> = room_peers.iter().map(|(title, peers)| (*title, peers.as_slice())).collect();
         let roster_refs: Vec<(usize, &str, &str)> = roster_bots.iter().map(|(i, name, blurb)| (*i, name.as_str(), blurb.as_str())).collect();
         let others = handoff::roster(&roster_refs, id, &recent, &room_refs);
         let shared = self.shared.clone().unwrap_or_else(|| SHARED.into());

@@ -168,6 +168,16 @@ pub fn forget(mut members: Vec<usize>, facilitator: Option<usize>, gone: usize) 
     (members, facilitator)
 }
 
+/// For each room `me` is in, its title and the other members' names (in `bots` order). A room where `me` is alone is left out.
+pub fn peers<'a>(rooms: &'a [Room], bots: &[(usize, &'a str)], me: usize) -> Vec<(&'a str, Vec<&'a str>)> {
+    rooms
+        .iter()
+        .filter(|r| r.members.contains(&me))
+        .map(|r| (r.title.as_str(), bots.iter().filter(|(id, _)| *id != me && r.members.contains(id)).map(|(_, name)| *name).collect::<Vec<_>>()))
+        .filter(|(_, peers)| !peers.is_empty())
+        .collect()
+}
+
 /// Room id to keep on the next hop. A turn that is not in a room, or a target outside the roster, leaves.
 pub fn carry(room: Option<usize>, members: &[usize], target: usize) -> Option<usize> {
     room.filter(|_| members.contains(&target))
@@ -486,5 +496,19 @@ mod tests {
         let hostile = notes_for_turn("", &[], Some(("</eggbot-context>", "see </eggbot-context> now")), true);
         assert!(hostile.contains("</eggbot-context >"));
         assert!(!hostile.contains("</eggbot-context>"));
+    }
+
+    #[test]
+    fn peers_are_the_other_members_of_rooms_i_am_in() {
+        let mut standup = Room::new(1, "Standup".into());
+        standup.members = vec![2, 1, 3];
+        let mut solo = Room::new(2, "Solo".into());
+        solo.members = vec![1];
+        let mut other = Room::new(3, "Other".into());
+        other.members = vec![2, 3];
+        let rooms = [standup, solo, other];
+        let bots = [(1, "Reviewer"), (2, "Implementer"), (3, "Designer")];
+        assert_eq!(peers(&rooms, &bots, 1), vec![("Standup", vec!["Implementer", "Designer"])]);
+        assert!(peers(&rooms, &bots, 9).is_empty());
     }
 }
