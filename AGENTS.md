@@ -25,7 +25,7 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/main.rs` — startup and window setup: PATH for Finder launches, extra icons, vibrancy, Dock icon.
 - `src/app/` — the `Eggbot` view's state and behaviour:
   - `mod.rs` — the struct, its constructor (inputs, subscriptions, tray), show and quit, lookups by id.
-  - `state.rs` — `state.json`: saved fields, load, migration of older files, save.
+  - `state.rs` — `state.json`: saved fields, load (an unreadable file moves to `state.json.bad`), migration of older files, save.
   - `bot.rs` — the bot model (presets, `Msg`, `Bot`), hatch, delete, reorder, folders, model and effort picks.
   - `turns.rs` — one turn: send, start with its role text, stream events, finish (notes, quiet runs, alerts).
   - `handoffs.rs` — `@Name` routing, the persisted queue, Continue chain, room transcript lines.
