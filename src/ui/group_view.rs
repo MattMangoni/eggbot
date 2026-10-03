@@ -166,7 +166,7 @@ impl Eggbot {
     /// Shared notes, read-only, like room memory. Only member bots write them.
     fn group_notes(&self, group_id: usize) -> AnyElement {
         let p = self.p;
-        let notes = std::fs::read_to_string(crate::group::notes_file(&crate::data_dir(), group_id)).unwrap_or_default();
+        let notes = std::fs::read_to_string(crate::group::notes_file(&crate::app::state::data_dir(), group_id)).unwrap_or_default();
         // Markdown headings render far larger than the panel text, so section titles show as bold labels.
         let notes = notes
             .lines()

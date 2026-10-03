@@ -7,10 +7,12 @@ use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 
 use crate::app::bot::Bot;
+use crate::app::state::{Saved, data_dir, default_sidebar, default_sidebar_open};
 use crate::claude::{Meter, Provider};
-use crate::{Appearance, Choice, Palette, Saved, Setup, codex, data_dir, default_sidebar, default_sidebar_open, group, notify, room, sandbox, set_dock_icon, tray, usage};
+use crate::{Appearance, Choice, Palette, Setup, codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
 
 pub(crate) mod bot;
+pub(crate) mod state;
 
 /// The one panel open above the main pane. Settings shows in every view; the others need a bot chat.
 #[derive(Clone, Copy, PartialEq)]

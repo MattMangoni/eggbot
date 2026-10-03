@@ -60,7 +60,7 @@ impl Eggbot {
     /// Room memory, read-only. Anyone who opens the room can read it. Only a member bot can write.
     fn room_memory(&self, room_id: usize) -> AnyElement {
         let p = self.p;
-        let notes = std::fs::read_to_string(crate::room::notes_file(&crate::data_dir(), room_id)).unwrap_or_default();
+        let notes = std::fs::read_to_string(crate::room::notes_file(&crate::app::state::data_dir(), room_id)).unwrap_or_default();
         let notes = notes.trim().to_string();
         div()
             .id("room-memory")

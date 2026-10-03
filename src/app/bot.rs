@@ -7,9 +7,10 @@ use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
 use super::{Eggbot, Panel};
+use crate::app::state::data_dir;
 use crate::claude::Provider;
 use crate::egg::Mood;
-use crate::{claude, data_dir, group, handoff, room, sandbox, schedule, skills};
+use crate::{claude, group, handoff, room, sandbox, schedule, skills};
 
 pub(crate) struct Preset {
     pub(crate) name: &'static str,
