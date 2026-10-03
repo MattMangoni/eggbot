@@ -10,9 +10,9 @@ use crate::claude::{Meter, Provider};
 use crate::ui::composer::Choice;
 use crate::ui::theme::{Appearance, Palette};
 use crate::{codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
-use bot::Bot;
+use bot::{Bot, Msg};
 use setup::Setup;
-use state::{default_sidebar, default_sidebar_open};
+use state::{Loaded, default_sidebar, default_sidebar_open};
 
 pub(crate) mod actions;
 pub(crate) mod bot;
@@ -127,6 +127,8 @@ pub(crate) struct Eggbot {
     pub(crate) room_list: ListState,
     /// Room id `room_list` was built for. None after the room closes, so the next open jumps to the end.
     room_list_for: Option<usize>,
+    /// `state.json` could not be read or moved aside; saving would overwrite it.
+    no_save: bool,
 }
 
 impl Eggbot {
@@ -239,9 +241,16 @@ impl Eggbot {
         .detach();
         Self::start_ticker(cx);
         let p = Palette::apply(window, cx);
-        let saved = state::load();
+        let loaded = state::load();
+        let first_launch = matches!(loaded, Loaded::Fresh);
+        let no_save = matches!(loaded, Loaded::Stuck);
+        let (saved, notice) = match loaded {
+            Loaded::Saved(s) => (Some(s), None),
+            Loaded::Fresh => (None, None),
+            Loaded::BackedUp(bad) => (None, Some(format!("Could not read state.json, so eggbot started fresh; the old file is saved at {}.", bad.display()))),
+            Loaded::Stuck => (None, Some("Could not read state.json, so eggbot will not save changes this session.".to_string())),
+        };
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
-        let first_launch = saved.is_none();
         let mut this = Self {
             p,
             bots: vec![],
@@ -308,6 +317,7 @@ impl Eggbot {
             open_group: None,
             group_title,
             confirm_delete_group: None,
+            no_save,
         };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
@@ -319,6 +329,9 @@ impl Eggbot {
                 }
                 this.selected = 0;
             }
+        }
+        if let (Some(t), Some(b)) = (notice, this.bots.first_mut()) {
+            b.msgs.push(Msg::Error(t));
         }
         // after loading: it saves state
         this.set_appearance(appearance, window, cx);

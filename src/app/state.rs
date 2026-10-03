@@ -1,6 +1,6 @@
 //! `state.json`: what is saved, where it lives, and how an older file still loads.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -67,9 +67,43 @@ fn default_pause() -> f32 {
     usage::DEFAULT_PAUSE
 }
 
-/// `state.json` from the last run. None on first launch, and also when the file does not parse.
-pub(crate) fn load() -> Option<Saved> {
-    std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok())
+/// What startup found at `state.json`.
+pub(crate) enum Loaded {
+    /// No file: a first launch.
+    Fresh,
+    Saved(Saved),
+    /// The file did not read or parse; it now lives at this path.
+    BackedUp(PathBuf),
+    /// The file did not read or parse and could not be moved; this session must not save over it.
+    Stuck,
+}
+
+pub(crate) fn load() -> Loaded {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    load_from(&data_dir(), now)
+}
+
+/// Reads `dir/state.json`; a file that does not parse moves to `state.json.bad`, or `state.json.bad-<now>` if that is taken.
+fn load_from(dir: &Path, now: u64) -> Loaded {
+    let path = dir.join("state.json");
+    let read = match std::fs::read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Fresh,
+        read => read,
+    };
+    if let Some(s) = read.ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+        return Loaded::Saved(s);
+    }
+    let mut bad = dir.join("state.json.bad");
+    if bad.exists() {
+        bad = dir.join(format!("state.json.bad-{now}"));
+    }
+    match std::fs::rename(&path, &bad) {
+        Ok(()) => Loaded::BackedUp(bad),
+        Err(e) => {
+            eprintln!("eggbot: could not read {} or move it aside ({e}); not saving state this session", path.display());
+            Loaded::Stuck
+        }
+    }
 }
 
 impl Saved {
@@ -102,6 +136,9 @@ impl Eggbot {
     }
 
     pub(crate) fn save(&self) {
+        if self.no_save {
+            return;
+        }
         let dir = data_dir();
         let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups });
         // write then rename, so a crash mid-write never loses the history
@@ -277,5 +314,35 @@ mod tests {
         assert!(saved.bots[1].queue.is_empty() && saved.bots[1].current.is_none());
         assert_eq!((saved.next_room_id, saved.next_group_id), (5, 8));
         assert!(!Saved::default().has_content());
+    }
+
+    #[test]
+    fn an_unreadable_state_json_moves_aside_and_is_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("eggbot-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = dir.join("state.json");
+        assert!(matches!(load_from(&dir, 7), Loaded::Fresh));
+
+        std::fs::write(&state, r#"{"next_id":1,"bots":[]}"#).unwrap();
+        assert!(matches!(load_from(&dir, 7), Loaded::Saved(s) if s.next_id == 1));
+
+        std::fs::write(&state, "{broken").unwrap();
+        assert!(matches!(load_from(&dir, 7), Loaded::BackedUp(p) if p == dir.join("state.json.bad")));
+        assert!(!state.exists());
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad")).unwrap(), "{broken");
+
+        // an older backup stays; the new one gets a timestamp
+        std::fs::write(&state, "{again").unwrap();
+        assert!(matches!(load_from(&dir, 7), Loaded::BackedUp(p) if p == dir.join("state.json.bad-7")));
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad")).unwrap(), "{broken");
+        assert_eq!(std::fs::read_to_string(dir.join("state.json.bad-7")).unwrap(), "{again");
+
+        // a non-empty directory at the target makes the rename fail; the file stays where it was
+        std::fs::create_dir_all(dir.join("state.json.bad-8/x")).unwrap();
+        std::fs::write(&state, "{stuck").unwrap();
+        assert!(matches!(load_from(&dir, 8), Loaded::Stuck));
+        assert_eq!(std::fs::read_to_string(&state).unwrap(), "{stuck");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
