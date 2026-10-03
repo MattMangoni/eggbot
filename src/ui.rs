@@ -719,7 +719,7 @@ impl Eggbot {
             Panel::Skills => Some(self.skills(bot, cx).into_any_element()),
         };
 
-        let body = if bot.msgs.is_empty() {
+        let body = if bot.msgs.is_empty() && !bot.queue.iter().any(|q| q.typed) {
             div()
                 .flex_1()
                 .flex()
@@ -772,10 +772,26 @@ impl Eggbot {
             .bg(p.ink)
             .text_color(p.bg)
             .cursor_pointer()
-            .when(paused && !busy, |d| d.opacity(0.4))
+            .when(paused, |d| d.opacity(0.4))
             .hover(|d| d.opacity(0.8))
-            .on_click(cx.listener(move |this, _, window, cx| if busy { this.stop(cx) } else { this.send(window, cx) }))
-            .child(if busy { div().size(px(10.)).rounded(px(2.)).bg(p.bg).into_any_element() } else { Icon::new(IconName::ArrowUp).size_4().into_any_element() });
+            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
+            .child(Icon::new(IconName::ArrowUp).size_4());
+        let stop = busy.then(|| {
+            div()
+                .id("stop")
+                .size(px(32.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(p.line)
+                .cursor_pointer()
+                .hover(|d| d.bg(p.hover))
+                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                .child(div().size(px(10.)).rounded(px(2.)).bg(p.ink))
+        });
 
         // dropdowns hug their label, like the references
         let model_label = self.model_select.read(cx).selected_value().cloned().flatten().and_then(|v| {
@@ -861,7 +877,7 @@ impl Eggbot {
                             .child(div().w(px(1.)).h(px(14.)).bg(p.line))
                             .child(div().flex_none().w(px(fit(&effort_label))).child(Select::new(&self.effort_select).appearance(false).xsmall().menu_width(px(160.))))
                             .child(div().flex_1())
-                            .child(send),
+                            .child(div().flex().items_center().gap_2().children(stop).child(send)),
                     ),
             )
             .child(
@@ -1007,8 +1023,10 @@ impl Eggbot {
         let Some(bot) = self.bots.get(self.selected) else { return div().into_any_element() };
         let el = match bot.msgs.get(ix) {
             Some(m) => self.message(bot, ix, m, cx),
-            None if bot.waiting() => self.typing(bot).into_any_element(),
-            None => div().into_any_element(),
+            None => {
+                let queued: Vec<AnyElement> = bot.queue.iter().enumerate().filter(|(_, q)| q.typed).map(|(at, q)| self.queued(bot, at, &q.prompt, cx)).collect();
+                div().flex().flex_col().gap_3().when(bot.waiting(), |d| d.child(self.typing(bot))).children(queued).into_any_element()
+            }
         };
         let (last, hit) = (ix == bot.msgs.len(), self.find_current() == Some(ix));
         // the 8px inset leaves room for the search highlight without moving the text
@@ -1709,6 +1727,37 @@ impl Eggbot {
             .child(div().child(label).with_animation("pulse", Animation::new(Duration::from_millis(1600)).repeat(), |d, t| d.opacity(0.45 + 0.55 * (t * std::f32::consts::TAU).cos().abs())))
     }
 
+    /// A message waiting on the bot's queue (busy or throttled); × drops it. It becomes a normal bubble when its turn starts.
+    fn queued(&self, bot: &Bot, at: usize, text: &str, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.p;
+        let note = if bot.busy() { "Queued · sends after this turn" } else { "Queued" };
+        let id = bot.id;
+        let remove = div()
+            .id(("unqueue", at))
+            .p_1()
+            .rounded(px(4.))
+            .text_color(p.muted)
+            .cursor_pointer()
+            .hover(|d| d.bg(p.hover).text_color(p.ink))
+            .on_click(cx.listener(move |this, _, _, cx| this.unqueue(id, at, cx)))
+            .child(Icon::new(IconName::Close).size_3());
+        div().flex().justify_end().child(
+            div()
+                .max_w(relative(0.75))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_4()
+                .py_2()
+                .rounded(px(18.))
+                .border_1()
+                .border_color(p.line)
+                .child(div().flex().items_center().gap_2().child(div().flex_1().text_xs().text_color(p.muted).child(note)).child(remove))
+                .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.muted).child(text.to_string())),
+        )
+        .into_any_element()
+    }
+
     fn message(&self, bot: &Bot, i: usize, m: &Msg, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let el = match m {
@@ -1897,6 +1946,7 @@ impl Render for Eggbot {
         if self.selects_stale {
             self.sync_selects(window, cx);
         }
+        self.sync_draft(window, cx);
         self.sync_list();
         self.sync_room_list();
         // no background here: the window is blurred behind the translucent sidebar

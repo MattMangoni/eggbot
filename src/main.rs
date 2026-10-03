@@ -365,6 +365,9 @@ struct Bot {
     /// Newest-first names this bot successfully handed work to. A paused chain is not recorded.
     #[serde(default)]
     recent: Vec<String>,
+    /// Composer text kept while another bot is selected. Not saved across restarts.
+    #[serde(skip)]
+    draft: String,
 }
 
 impl Bot {
@@ -537,6 +540,8 @@ struct Eggbot {
     codex_query: Option<Option<String>>,
     tray: Option<tray::Tray>,
     input: Entity<TextareaState>,
+    /// Bot id whose draft is in `input`; a different selected bot swaps drafts.
+    draft_bot: Option<usize>,
     panel: Panel,
     /// 0 daily, 1 weekdays, 2 every N hours, 3 every N minutes
     sched_kind: usize,
@@ -765,7 +770,7 @@ impl Eggbot {
         let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
-        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, panel: Panel::None, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skill_name, skill_body, skill_at: None, skill_error: None, edit_name, edit_role, edit_error: None, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None, groups: vec![], next_group_id: 0, open_group: None, group_title, confirm_delete_group: None };
+        let mut this = Self { p, bots: vec![], selected: 0, next_id: 0, menu_open: false, quitting: false, confirm_delete: None, meters: vec![], throttle: usage::DEFAULT_THROTTLE, pause: usage::DEFAULT_PAUSE, codex_models: vec![], codex_query: None, tray: None, panel: Panel::None, sched_kind: 0, sched_prompt, sched_value, sched_error: None, skill_name, skill_body, skill_at: None, skill_error: None, edit_name, edit_role, edit_error: None, edit_shared, shared: None, limit_throttle, limit_pause, settings_error: None, login_error: None, model_select, effort_select, selects_stale: true, sidebar_w: default_sidebar(), sidebar_open: default_sidebar_open(), appearance, folder_error: None, active: false, find_open: false, find_input, find_hits: vec![], find_at: 0, setup: None, dragging: None, resizing: false, input, draft_bot: None, list: ListState::new(0, ListAlignment::Bottom, px(800.)), list_bot: None, room_list: ListState::new(0, ListAlignment::Bottom, px(800.)), room_list_for: None, rooms: vec![], next_room_id: 0, open_room: None, room_title, room_kickoff, room_error: None, room_status: None, confirm_delete_room: None, groups: vec![], next_group_id: 0, open_group: None, group_title, confirm_delete_group: None };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
         match saved {
@@ -961,6 +966,7 @@ impl Eggbot {
             current: None,
             retried: false,
             recent: vec![],
+            draft: String::new(),
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -1020,6 +1026,22 @@ impl Eggbot {
     fn set_login(&mut self, on: bool, cx: &mut Context<Self>) {
         self.login_error = login::set(on).err();
         cx.notify();
+    }
+
+    /// Puts the composer text back on the bot it was typed for and loads the selected bot's draft.
+    /// Runs in render and before a send, so every way of changing the selection is covered.
+    fn sync_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = self.bots.get(self.selected).map(|b| b.id);
+        if now == self.draft_bot {
+            return;
+        }
+        let (old, text) = (self.draft_bot, self.input.read(cx).value().to_string());
+        if let Some(b) = self.bots.iter_mut().find(|b| Some(b.id) == old) {
+            b.draft = text;
+        }
+        let next = self.bots.get_mut(self.selected).map(|b| std::mem::take(&mut b.draft)).unwrap_or_default();
+        self.input.update(cx, |s, cx| s.set_value(next, window, cx));
+        self.draft_bot = now;
     }
 
     /// Tells the chat list about added or removed messages; visible rows re-measure themselves every frame.
@@ -1175,32 +1197,42 @@ impl Eggbot {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_draft(window, cx);
         let text = self.input.read(cx).value().trim().to_string();
         let Some(bot) = self.bots.get(self.selected) else { return };
-        if text.is_empty() || bot.busy() {
+        if text.is_empty() {
             return;
         }
-        let (id, provider) = (bot.id, bot.provider);
+        let (id, provider, busy) = (bot.id, bot.provider, bot.busy());
         // a paused send stays in the box, so a window that resets overnight does not fire a draft
         if self.breach_of(provider).is_some_and(|b| b.level == usage::Level::Pause) {
             cx.notify();
             return;
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
+        // busy, or throttled behind another bot: the message waits on the persisted queue
+        if busy || !self.may_start(provider) {
+            self.deliver(id, handoff::Pending::typed(text), cx);
+            return;
+        }
         if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
             bot.msgs.push(Msg::User(text.clone()));
         }
-        let pending = handoff::Pending::user(text);
-        // throttled and another bot is running: the message waits on the persisted queue
-        if !self.may_start(provider) {
-            self.deliver(id, pending, cx);
-            return;
+        self.start_turn(id, handoff::Pending::user(text), cx);
+    }
+
+    /// Drops one message the user queued. `at` indexes the bot's whole queue; other kinds of queued work stay.
+    fn unqueue(&mut self, id: usize, at: usize, cx: &mut Context<Self>) {
+        let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) else { return };
+        if bot.queue.get(at).is_some_and(|q| q.typed) {
+            bot.queue.remove(at);
+            self.save();
+            cx.notify();
         }
-        self.start_turn(id, pending, cx);
     }
 
     /// `pending.fresh` runs the turn in a throwaway session (schedules), leaving the main session untouched.
-    fn start_turn(&mut self, id: usize, pending: handoff::Pending, cx: &mut Context<Self>) {
+    fn start_turn(&mut self, id: usize, mut pending: handoff::Pending, cx: &mut Context<Self>) {
         let Some(provider) = self.bots.iter().find(|b| b.id == id).map(|b| b.provider) else { return };
         let busy = self.bots.iter().find(|b| b.id == id).is_some_and(|b| b.busy());
         // never drop a hop: if the guard closed, put it back at the front of the saved queue
@@ -1242,6 +1274,10 @@ impl Eggbot {
         bot.stopped = false;
         bot.hops = hops;
         bot.fresh_turn = fresh;
+        // cleared so a sign-in retry of this turn does not add the bubble twice
+        if std::mem::take(&mut pending.typed) {
+            bot.msgs.push(Msg::User(pending.prompt.clone()));
+        }
         bot.reply_from = bot.msgs.len();
         bot.current = Some(pending);
         // notes stay in /memory; scratch is /work only when the user has mounted nothing
