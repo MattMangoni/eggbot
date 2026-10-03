@@ -252,7 +252,7 @@ impl Eggbot {
                 (Some(b), _) => b.name.clone(),
                 _ => "No bots yet".into(),
             };
-            let icon = div().size(px(9.)).rounded(px(2.)).border_1().border_color(if on { p.ink } else { p.muted });
+            let icon = Icon::new(IconName::MessagesSquare).size_4().text_color(if on { p.ink } else { p.muted });
             self.nav_row(("room", id), on, icon, r.title.clone(), subtitle)
                 .on_click(cx.listener(move |this, _, window, cx| this.show_room(id, window, cx)))
                 .when(r.unread && !on, |d| d.child(div().size(px(7.)).flex_none().rounded_full().bg(p.ink)))
@@ -281,7 +281,7 @@ impl Eggbot {
                 [one] => one.clone(),
                 [first, rest @ ..] => format!("{first} + {}", rest.len()),
             };
-            let icon = Icon::new(IconName::Network).size_4().text_color(if on { p.ink } else { p.muted });
+            let icon = Icon::new(IconName::Users).size_4().text_color(if on { p.ink } else { p.muted });
             self.nav_row(("group", id), on, icon, g.title.clone(), subtitle).on_click(cx.listener(move |this, _, window, cx| this.show_group(id, window, cx)))
         });
         let plus = div().id("new-group").on_click(cx.listener(|this, _, window, cx| this.new_group(window, cx)));
