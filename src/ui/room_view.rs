@@ -8,7 +8,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{READ_W, TRAFFIC_INSET, button, primary};
+use super::{READ_W, TRAFFIC_INSET, button, divider, field, label, primary};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
 use crate::handoff;
@@ -75,8 +75,8 @@ impl Eggbot {
             .py_4()
             .border_b_1()
             .border_color(p.line)
-            .child(div().text_xs().text_color(p.muted).child("Memory"))
-            .child(div().text_xs().text_color(p.muted).child("Anyone who opens this room can read this. Only a member bot can add to it. This is not the transcript."))
+            .child(label("Memory", p))
+            .child(label("Anyone who opens this room can read this. Only a member bot can add to it. This is not the transcript.", p))
             .child(if notes.is_empty() {
                 div().text_sm().text_color(p.muted).child("No memory yet.").into_any_element()
             } else {
@@ -93,8 +93,6 @@ impl Eggbot {
             return div().into_any_element();
         };
         let why = crate::room::block(&title, &kickoff, &members, facilitator);
-        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
-        let field = || div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line);
         let roster: Vec<_> = self
             .bots
             .iter()
@@ -116,7 +114,7 @@ impl Eggbot {
                     .child(egg(format!("room-{bot_id}"), hex(b.color()), 14., b.mood()))
                     .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
                     .when(busy, |d| d.child(Spinner::new().color(p.muted).xsmall()))
-                    .when(on && fac, |d| d.child(div().text_xs().text_color(p.muted).child("Facilitator")))
+                    .when(on && fac, |d| d.child(label("Facilitator", p)))
                     .when(on && !fac, |d| {
                         d.child(
                             div()
@@ -153,11 +151,11 @@ impl Eggbot {
             .pb_8()
             .child(
                 self.panel()
-                    .child(div().flex().flex_col().gap_1().child(label("Title")).child(field().child(Input::new(&self.room_title).appearance(false))))
-                    .child(div().flex().flex_col().gap_1().child(label("Kickoff")).child(field().child(Textarea::new(&self.room_kickoff).appearance(false))))
-                    .child(div().text_xs().text_color(p.muted).child("Start sends this to the facilitator only. Their reply, and any @Name that stays in this room, shows here. There is no lead."))
-                    .child(div().h(px(1.)).bg(p.line))
-                    .child(label("Bots"))
+                    .child(div().flex().flex_col().gap_1().child(label("Title", p)).child(field(p).child(Input::new(&self.room_title).appearance(false))))
+                    .child(div().flex().flex_col().gap_1().child(label("Kickoff", p)).child(field(p).child(Textarea::new(&self.room_kickoff).appearance(false))))
+                    .child(label("Start sends this to the facilitator only. Their reply, and any @Name that stays in this room, shows here. There is no lead.", p))
+                    .child(divider(p))
+                    .child(label("Bots", p))
                     .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
                     .child(div().flex().flex_col().gap_1().children(roster))
                     .child(

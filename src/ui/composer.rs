@@ -7,7 +7,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{link, soft_shadow};
+use super::{label, link, soft_shadow};
 use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
@@ -142,7 +142,7 @@ impl Eggbot {
         let fit = |label: &str| (label.chars().count() as f32 * 6.2 + 28.).clamp(48., 260.);
         let codex_note = (bot.provider == Provider::Codex && self.codex_models.is_empty()).then(|| self.codex_query.clone()).flatten();
         let note = codex_note.map(|failed| match failed {
-            None => div().text_xs().text_color(p.muted).child("Loading Codex models…").into_any_element(),
+            None => label("Loading Codex models…", p).into_any_element(),
             Some(e) if e.contains("codex login") => {
                 link("codex-sign-in", p).child("Codex is not signed in · Sign in").on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))).into_any_element()
             }

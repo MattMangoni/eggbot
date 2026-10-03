@@ -10,7 +10,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{TRAFFIC_INSET, bar, button};
+use super::{TRAFFIC_INSET, bar, button, divider};
 use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
@@ -75,7 +75,7 @@ impl Eggbot {
                         )
                 });
                 let me = me.clone();
-                div().w(px(300.)).flex().flex_col().children(rows).child(div().h(px(1.)).my_1().bg(p.line)).child(
+                div().w(px(300.)).flex().flex_col().children(rows).child(divider(p).my_1()).child(
                     div()
                         .id("folder-add")
                         .flex()

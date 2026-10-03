@@ -8,10 +8,10 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{TRAFFIC_INSET, bar, soft_shadow};
+use super::{TRAFFIC_INSET, bar, heading, soft_shadow};
 use crate::app::Eggbot;
 use crate::app::bot::{PRESETS, drop_index};
-use crate::claude::{Meter, Provider};
+use crate::claude::Meter;
 use crate::egg::{Mood, egg};
 use crate::ui::theme::{Palette, hex};
 use crate::usage;
@@ -145,32 +145,24 @@ impl Eggbot {
             .border_color(p.line)
             .child(
                 // traffic lights sit on the left of this row
-                div()
-                    .h(px(44.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .pl(px(TRAFFIC_INSET))
-                    .pr_2()
-                    .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("eggbot"))
-                    .child(
-                        div()
-                            .id("new-bot")
-                            .size(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .text_color(p.muted)
-                            .cursor_pointer()
-                            .when(self.menu_open, |d| d.bg(p.hover).text_color(p.ink))
-                            .hover(|d| d.bg(p.hover).text_color(p.ink))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.menu_open = !this.menu_open;
-                                cx.notify();
-                            }))
-                            .child(Icon::new(IconName::Plus).size_4()),
-                    ),
+                div().h(px(44.)).flex_none().flex().items_center().pl(px(TRAFFIC_INSET)).pr_2().child(heading("eggbot", p).flex_1()).child(
+                    div()
+                        .id("new-bot")
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .when(self.menu_open, |d| d.bg(p.hover).text_color(p.ink))
+                        .hover(|d| d.bg(p.hover).text_color(p.ink))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.menu_open = !this.menu_open;
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::Plus).size_4()),
+                ),
             )
             .when(self.menu_open, |d| d.child(self.hatch_menu(cx)))
             .child(
@@ -308,7 +300,7 @@ impl Eggbot {
         let p = self.p;
         let now = chrono::Local::now().timestamp();
         let at = chrono::DateTime::from_timestamp(meter.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
-        let name = if meter.provider == Provider::Codex { "Codex" } else { "Claude" };
+        let name = usage::provider_name(meter.provider);
         div()
             .flex()
             .flex_col()

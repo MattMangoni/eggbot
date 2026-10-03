@@ -14,8 +14,8 @@ use crate::app::setup::needs_login;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::egg::{Mood, egg};
-use crate::handoff;
 use crate::ui::theme::hex;
+use crate::{handoff, usage};
 
 impl Eggbot {
     pub(crate) fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -285,7 +285,7 @@ impl Eggbot {
                     .text_sm()
                     .text_color(p.ok)
                     .child(Icon::new(IconName::Check).size_4())
-                    .child(format!("Signed in to {}", if *provider == Provider::Codex { "Codex" } else { "Claude" }))
+                    .child(format!("Signed in to {}", usage::provider_name(*provider)))
                     .when(prompt.is_some(), |d| d.child(button(("again", i), p).ml_2().on_click(cx.listener(move |this, _, _, cx| this.send_again(id, i, cx))).child("Send again")))
             }
             Msg::Divider(label) => {

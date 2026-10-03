@@ -8,7 +8,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{button, field, heading, link, primary};
+use super::{button, divider, field, heading, label, link, primary};
 use crate::app::bot::{Bot, SHELLS};
 use crate::app::setup::{Check, Setup};
 use crate::app::{Eggbot, Panel};
@@ -88,7 +88,7 @@ impl Eggbot {
                     ("Build", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.image, "Building, about a minute…", || sandbox::ready(&|_| {}), cx)) as Act)
                 }),
             ))
-            .child(div().h(px(1.)).my_1().bg(p.line))
+            .child(divider(p).my_1())
             .child(row("setup-claude", "Claude", &s.claude, "Signed in to Claude.", "Sign in with your Claude plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(false)))))
             .child(row("setup-codex", "Codex", &s.codex, "Signed in to Codex.", "Sign in with your ChatGPT plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(true)))));
         let done = s.done();
@@ -150,25 +150,24 @@ impl Eggbot {
                     }
                 }))
         });
-        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
         div().px_6().child(
             self.panel()
-                .child(div().flex().flex_col().gap_1().child(label("Name")).child(field(p).child(Input::new(&self.edit_name).appearance(false))))
+                .child(div().flex().flex_col().gap_1().child(label("Name", p)).child(field(p).child(Input::new(&self.edit_name).appearance(false))))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(label("Role"))
+                        .child(label("Role", p))
                         .child(field(p).child(Textarea::new(&self.edit_role).appearance(false)))
-                        .child(div().text_xs().text_color(p.muted).child("Skills sit under the composer and go out with this role.")),
+                        .child(label("Skills sit under the composer and go out with this role.", p)),
                 )
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(label("Egg"))
+                        .child(label("Egg", p))
                         .children(swatches)
                         .child(div().flex_1())
                         .child(
@@ -188,7 +187,6 @@ impl Eggbot {
     /// Settings (⌘,): start at login, and instructions every bot gets.
     pub(crate) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
-        let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
         let login = login::state();
         let note = match (&self.login_error, &login) {
             (Some(e), _) => Some(div().text_xs().text_color(p.err).child(e.clone()).into_any_element()),
@@ -206,47 +204,40 @@ impl Eggbot {
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("Start at login"))
-                                .child(label("Only the menu bar egg appears, and schedules keep running.")),
-                        )
+                        .child(div().flex().flex_col().flex_1().child(heading("Start at login", p)).child(label("Only the menu bar egg appears, and schedules keep running.", p)))
                         .child(Switch::new("login").checked(on).on_click(cx.listener(|this, on: &bool, _, cx| this.set_login(*on, cx)))),
                 )
                 .children(note)
-                .child(div().h(px(1.)).bg(p.line))
+                .child(divider(p))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
                         .child(heading("Instructions for all bots", p))
-                        .child(label("Every bot gets these next to its own role, from its next turn."))
+                        .child(label("Every bot gets these next to its own role, from its next turn.", p))
                         .child(field(p).mt_1().child(Textarea::new(&self.edit_shared).appearance(false))),
                 )
-                .child(div().h(px(1.)).bg(p.line))
+                .child(divider(p))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
                         .child(heading("Usage guardrails", p))
-                        .child(label("Throttle runs one bot per provider. Pause holds new turns and leaves schedules due. Bars turn amber at 80%."))
+                        .child(label("Throttle runs one bot per provider. Pause holds new turns and leaves schedules due. Bars turn amber at 80%.", p))
                         .child(
                             div()
                                 .mt_1()
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(label("Throttle at"))
+                                .child(label("Throttle at", p))
                                 .child(field(p).w(px(64.)).child(Input::new(&self.limit_throttle).appearance(false)))
-                                .child(label("%"))
-                                .child(label("Pause at").ml_2())
+                                .child(label("%", p))
+                                .child(label("Pause at", p).ml_2())
                                 .child(field(p).w(px(64.)).child(Input::new(&self.limit_pause).appearance(false)))
-                                .child(label("%")),
+                                .child(label("%", p)),
                         ),
                 )
                 .when_some(self.settings_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
@@ -319,10 +310,10 @@ impl Eggbot {
         div().px_6().child(
             self.panel()
                 .child(heading(format!("{}'s skills", bot.name), p))
-                .child(div().text_xs().text_color(p.muted).child("Procedures this bot follows from its next turn."))
+                .child(label("Procedures this bot follows from its next turn.", p))
                 .when(bot.skills.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("No skills yet. Add one below.")))
                 .child(div().flex().flex_col().gap_1().children(rows))
-                .child(div().h(px(1.)).bg(p.line))
+                .child(divider(p))
                 .child(field(p).child(Input::new(&self.skill_name).appearance(false)))
                 .child(field(p).child(Textarea::new(&self.skill_body).appearance(false)))
                 .child(
@@ -406,7 +397,7 @@ impl Eggbot {
                 .when(bot.schedules.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Nothing scheduled. Each run starts a fresh session with the bot's notes.")))
                 .when(wait && !bot.schedules.is_empty(), |d| d.child(div().text_xs().text_color(note_color).child("Due runs wait here instead of starting, and go once the meter drops.")))
                 .child(div().flex().flex_col().gap_2().children(rows))
-                .child(div().h(px(1.)).bg(p.line))
+                .child(divider(p))
                 .child(field(p).child(Input::new(&self.sched_prompt).appearance(false)))
                 .child(
                     div()
@@ -418,7 +409,7 @@ impl Eggbot {
                         .child(div().flex_1())
                         .child(primary("add-schedule", p).on_click(cx.listener(|this, _, window, cx| this.add_schedule(window, cx))).child("Add")),
                 )
-                .when(self.sched_kind == 3, |d| d.child(div().text_xs().text_color(p.muted).child("Short intervals use your plan limit quickly.")))
+                .when(self.sched_kind == 3, |d| d.child(label("Short intervals use your plan limit quickly.", p)))
                 .when_some(self.sched_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e))),
         )
     }

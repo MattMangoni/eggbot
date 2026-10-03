@@ -7,7 +7,7 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{TRAFFIC_INSET, button};
+use super::{TRAFFIC_INSET, button, divider, field, heading, label};
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
 use crate::ui::theme::hex;
@@ -53,9 +53,6 @@ impl Eggbot {
         let Some(members) = self.groups.iter().find(|g| g.id == group_id).map(|g| g.members.clone()) else {
             return div().into_any_element();
         };
-        let heading = |t: &'static str| div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(t);
-        let hint = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
-        let divider = || div().h(px(1.)).bg(p.line);
         // A filled box alone reads as a plain white square in dark mode, so the tick carries the state.
         let check = |on: bool| {
             div()
@@ -118,7 +115,7 @@ impl Eggbot {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.group_title).appearance(false)))
+                            .child(field(p).child(Input::new(&self.group_title).appearance(false)))
                             .child(
                                 div()
                                     .text_sm()
@@ -133,23 +130,23 @@ impl Eggbot {
                                     .child("Tell one member \"remember for the group: we deploy on Fridays\" and the others know it next turn. Private notes and skills stay on each bot."),
                             ),
                     )
-                    .child(divider())
+                    .child(divider(p))
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(div().flex().items_baseline().gap_2().child(heading("Members")).child(div().text_xs().text_color(p.muted).child(if count == 1 {
+                            .child(div().flex().items_baseline().gap_2().child(heading("Members", p)).child(div().text_xs().text_color(p.muted).child(if count == 1 {
                                 "1 bot".to_string()
                             } else {
                                 format!("{count} bots")
                             })))
-                            .child(hint("Tick a bot to let it read and add to the shared notes.")),
+                            .child(label("Tick a bot to let it read and add to the shared notes.", p)),
                     )
                     .child(
                         div().flex().flex_col().gap_0p5().when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here."))).children(roster),
                     )
-                    .child(divider())
+                    .child(divider(p))
                     .child(self.group_notes(group_id))
                     .child(
                         div().flex().items_center().gap_2().child(div().flex_1()).child(
@@ -180,14 +177,7 @@ impl Eggbot {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("Shared notes"))
-                    .child(div().text_xs().text_color(p.muted).child("Read-only. Member bots write these; you cannot edit them here.")),
-            )
+            .child(div().flex().flex_col().gap_1().child(heading("Shared notes", p)).child(label("Read-only. Member bots write these; you cannot edit them here.", p)))
             .child(div().id("group-notes").max_h(px(320.)).overflow_y_scroll().px_3().py_2().rounded(px(8.)).border_1().border_color(p.line).child(if notes.is_empty() {
                 div().text_sm().text_color(p.muted).child("No shared notes yet.").into_any_element()
             } else {

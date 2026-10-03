@@ -61,6 +61,16 @@ fn heading(t: impl Into<SharedString>, p: Palette) -> Div {
     div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(t.into())
 }
 
+/// Small muted text: field labels and hints.
+fn label(t: impl Into<SharedString>, p: Palette) -> Div {
+    div().text_xs().text_color(p.muted).child(t.into())
+}
+
+/// A hairline between panel sections.
+fn divider(p: Palette) -> Div {
+    div().h(px(1.)).bg(p.line)
+}
+
 impl Eggbot {
     fn panel(&self) -> Div {
         let p = self.p;
