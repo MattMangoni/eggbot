@@ -62,7 +62,7 @@ impl Eggbot {
     fn room_memory(&self, room_id: usize) -> AnyElement {
         let p = self.p;
         let notes = std::fs::read_to_string(crate::room::notes_file(&crate::app::state::data_dir(), room_id)).unwrap_or_default();
-        let notes = notes.trim().to_string();
+        let notes = crate::memory::as_labels(&notes);
         div()
             .id("room-memory")
             .flex()
