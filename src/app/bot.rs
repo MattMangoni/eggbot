@@ -97,6 +97,11 @@ pub(crate) fn reply_text(msgs: &[Msg], from: usize) -> String {
     msgs[from..].iter().filter_map(|m| if let Msg::Bot(t) = m { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
 }
 
+/// `base`, or `base 2`, `base 3`… The first one `taken` does not claim. Bots, rooms, and groups share this rule.
+pub(crate) fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap()
+}
+
 impl Msg {
     /// The text search looks in: what people and bots wrote, not tool output.
     pub(crate) fn searchable(&self) -> Option<&str> {
@@ -107,7 +112,7 @@ impl Msg {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct Bot {
     pub(crate) id: usize,
     pub(crate) name: String,
@@ -230,41 +235,14 @@ impl Eggbot {
         self.panel = Panel::None;
         self.skill_at = None;
         let base = PRESETS[preset].name;
-        let taken = |n: &str| self.bots.iter().any(|b| b.name == n);
-        let name = (1..).map(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }).find(|n| !taken(n)).unwrap();
+        let name = unique_name(base, |n| self.bots.iter().any(|b| b.name == n));
         self.bots.push(Bot {
             id: self.next_id,
             name,
             preset,
-            folders: vec![],
-            folder: None,
-            session: None,
-            provider: Provider::Claude,
-            thread: None,
-            msgs: vec![],
-            schedules: vec![],
-            role: None,
-            color: None,
-            model: None,
-            effort: None,
             // copied by preset name, so this bot keeps its own list after hatch
             skills: skills::defaults(PRESETS[preset].name),
-            run: None,
-            status: None,
-            stopped: false,
-            hops: 0,
-            reply_from: 0,
-            queue: vec![],
-            fresh_turn: false,
-            refreshing: false,
-            codex_role: None,
-            pending_role: None,
-            context: (0, 0),
-            unread: false,
-            current: None,
-            retried: false,
-            recent: vec![],
-            draft: String::new(),
+            ..Bot::default()
         });
         self.next_id += 1;
         self.selected = self.bots.len() - 1;
@@ -372,5 +350,13 @@ mod tests {
         ];
         assert_eq!(reply_text(&msgs, 4), "other");
         assert_eq!(reply_text(&msgs, msgs.len()), "");
+    }
+
+    #[test]
+    fn a_new_name_skips_the_taken_ones() {
+        assert_eq!(unique_name("Room", |_| false), "Room");
+        let taken = ["Reviewer", "Reviewer 2"];
+        assert_eq!(unique_name("Reviewer", |n| taken.contains(&n)), "Reviewer 3");
+        assert_eq!(unique_name("Group", |n| n == "Group 2"), "Group");
     }
 }

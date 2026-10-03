@@ -2,7 +2,7 @@
 
 use gpui_kit::*;
 
-use super::bot::Msg;
+use super::bot::{Msg, unique_name};
 use super::state::data_dir;
 use super::{Eggbot, Panel};
 use crate::claude::Provider;
@@ -72,8 +72,7 @@ impl Eggbot {
     }
 
     pub(crate) fn new_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let taken = |n: &str| self.rooms.iter().any(|r| r.title == n);
-        let title = (1..).map(|i| if i == 1 { "Room".to_string() } else { format!("Room {i}") }).find(|n| !taken(n)).unwrap();
+        let title = unique_name("Room", |n| self.rooms.iter().any(|r| r.title == n));
         let id = self.next_room_id;
         self.next_room_id += 1;
         self.rooms.push(room::Room::new(id, title));
@@ -163,8 +162,7 @@ impl Eggbot {
     }
 
     pub(crate) fn new_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let taken = |n: &str| self.groups.iter().any(|g| g.title == n);
-        let title = (1..).map(|i| if i == 1 { "Group".to_string() } else { format!("Group {i}") }).find(|n| !taken(n)).unwrap();
+        let title = unique_name("Group", |n| self.groups.iter().any(|g| g.title == n));
         let id = self.next_group_id;
         self.next_group_id += 1;
         self.groups.push(group::Group::new(id, title));
