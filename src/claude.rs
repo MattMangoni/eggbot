@@ -12,14 +12,14 @@ use serde_json::Value;
 use crate::sandbox;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
-pub enum Provider {
+pub(crate) enum Provider {
     #[default]
     Claude,
     Codex,
 }
 
 impl Provider {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
@@ -29,39 +29,51 @@ impl Provider {
 
 /// Plan usage for one provider: named windows (e.g. "5h", "week") with 0..1 used and reset time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Meter {
-    pub provider: Provider,
-    pub windows: Vec<Window>,
+pub(crate) struct Meter {
+    pub(crate) provider: Provider,
+    pub(crate) windows: Vec<Window>,
     /// Unix seconds when this was reported.
-    pub at: i64,
+    pub(crate) at: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Window {
-    pub label: String,
-    pub used: f32,
-    pub reset: i64,
+pub(crate) struct Window {
+    pub(crate) label: String,
+    pub(crate) used: f32,
+    pub(crate) reset: i64,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Ev {
+pub(crate) enum Ev {
     /// Sandbox progress before the agent starts (starting Docker, building the image…).
     Status(String),
     Session(String),
     TextStart,
     Text(String),
-    Tool { id: String, name: String, target: String },
-    ToolResult { id: String, content: String },
+    Tool {
+        id: String,
+        name: String,
+        target: String,
+    },
+    ToolResult {
+        id: String,
+        content: String,
+    },
     Usage(Meter),
     /// Tokens in the session's context now, and/or the model's context window.
-    Context { used: Option<u64>, window: Option<u64> },
-    Done { error: Option<String> },
+    Context {
+        used: Option<u64>,
+        window: Option<u64>,
+    },
+    Done {
+        error: Option<String>,
+    },
 }
 
 type Interrupt = Box<dyn FnOnce() + Send>;
 
 /// A running turn; `stop` ends it inside the container too.
-pub struct Handle {
+pub(crate) struct Handle {
     bot: usize,
     pub(crate) child: Mutex<Option<Child>>,
     /// Graceful stop (Codex `turn/interrupt`); without it the process is killed.
@@ -69,7 +81,7 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn stop(self: &Arc<Self>) {
+    pub(crate) fn stop(self: &Arc<Self>) {
         let this = self.clone();
         // docker calls block; keep them off the UI thread
         std::thread::spawn(move || {
@@ -84,29 +96,29 @@ impl Handle {
     }
 }
 
-pub struct Turn {
-    pub bot: usize,
+pub(crate) struct Turn {
+    pub(crate) bot: usize,
     /// User-picked folders, each mounted at `/work/<name>`. Empty: `scratch` is mounted at `/work`.
-    pub folders: Vec<sandbox::Mount>,
+    pub(crate) folders: Vec<sandbox::Mount>,
     /// Used at `/work` only when `folders` is empty.
-    pub scratch: PathBuf,
+    pub(crate) scratch: PathBuf,
     /// The bot's own folder for NOTES.md, mounted at /memory.
-    pub memory: PathBuf,
-    pub prompt: String,
-    pub role: String,
+    pub(crate) memory: PathBuf,
+    pub(crate) prompt: String,
+    pub(crate) role: String,
     /// Claude session id or Codex thread id to continue.
-    pub session: Option<String>,
+    pub(crate) session: Option<String>,
     /// Model alias or id; None = the provider's default.
-    pub model: Option<String>,
+    pub(crate) model: Option<String>,
     /// Reasoning effort level; None = the provider's default.
-    pub effort: Option<String>,
+    pub(crate) effort: Option<String>,
     /// Codex only: send `role` with this turn (new thread, or the role changed since it was last sent).
-    pub send_role: bool,
+    pub(crate) send_role: bool,
 }
 
 /// Runs `turn` on a thread; events arrive on the channel, which closes at the end.
 /// `turn` returns Ok(true) when the agent reported its own end (success or error).
-pub fn spawn(bot: usize, turn: impl FnOnce(&Handle, &dyn Fn(Ev)) -> Result<bool, String> + Send + 'static) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+pub(crate) fn spawn(bot: usize, turn: impl FnOnce(&Handle, &dyn Fn(Ev)) -> Result<bool, String> + Send + 'static) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
     let handle = Arc::new(Handle { bot, child: Mutex::new(None), interrupt: Mutex::new(None) });
     let (tx, rx) = async_channel::unbounded();
     let h = handle.clone();
@@ -123,7 +135,7 @@ pub fn spawn(bot: usize, turn: impl FnOnce(&Handle, &dyn Fn(Ev)) -> Result<bool,
 }
 
 /// Runs one `claude -p` turn in the bot's container.
-pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+pub(crate) fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
     spawn(t.bot, move |h, send| turn(&t, h, send))
 }
 
@@ -173,7 +185,7 @@ fn turn(t: &Turn, h: &Handle, send: &dyn Fn(Ev)) -> Result<bool, String> {
     }
 }
 
-pub fn parse(line: &str) -> Vec<Ev> {
+pub(crate) fn parse(line: &str) -> Vec<Ev> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return vec![] };
     let s = |p: &str| v.pointer(p).and_then(Value::as_str).unwrap_or_default().to_string();
     match v["type"].as_str().unwrap_or_default() {
@@ -189,14 +201,8 @@ pub fn parse(line: &str) -> Vec<Ev> {
             }
             _ => vec![],
         },
-        "assistant" => blocks(&v)
-            .filter(|b| b["type"] == "tool_use")
-            .map(|b| Ev::Tool { id: str_of(&b["id"]), name: str_of(&b["name"]), target: target(&b["input"]) })
-            .collect(),
-        "user" => blocks(&v)
-            .filter(|b| b["type"] == "tool_result")
-            .map(|b| Ev::ToolResult { id: str_of(&b["tool_use_id"]), content: result_text(&b["content"]) })
-            .collect(),
+        "assistant" => blocks(&v).filter(|b| b["type"] == "tool_use").map(|b| Ev::Tool { id: str_of(&b["id"]), name: str_of(&b["name"]), target: target(&b["input"]) }).collect(),
+        "user" => blocks(&v).filter(|b| b["type"] == "tool_result").map(|b| Ev::ToolResult { id: str_of(&b["tool_use_id"]), content: result_text(&b["content"]) }).collect(),
         "rate_limit_event" => {
             let w = &v["rate_limit_info"]["unifiedWindows"];
             let window = |label: &str, k: &str| Window { label: label.into(), used: w[k]["utilization"].as_f64().unwrap_or(0.) as f32, reset: w[k]["resetsAt"].as_i64().unwrap_or(0) };

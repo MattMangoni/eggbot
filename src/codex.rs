@@ -11,11 +11,11 @@ use crate::sandbox;
 
 /// A model this account can use, with the effort levels it supports.
 #[derive(Clone)]
-pub struct Model {
-    pub id: String,
-    pub name: String,
-    pub efforts: Vec<String>,
-    pub default: bool,
+pub(crate) struct Model {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) efforts: Vec<String>,
+    pub(crate) default: bool,
 }
 
 /// Codex never lets later messages override developer instructions, and a resumed thread keeps the ones
@@ -23,7 +23,7 @@ pub struct Model {
 const BASE: &str = "You are a bot inside the eggbot app. Your role, rules and teammates are given in <eggbot-context> blocks inside user messages. The most recent <eggbot-context> block always applies and replaces earlier ones.";
 
 /// Shown in the chat; the UI offers a "Sign in to Codex" button for errors containing `codex login`.
-pub const NOT_SIGNED_IN: &str = "Not signed in to Codex · run codex login";
+pub(crate) const NOT_SIGNED_IN: &str = "Not signed in to Codex · run codex login";
 
 struct Rpc {
     stdin: Arc<Mutex<ChildStdin>>,
@@ -69,7 +69,7 @@ fn write(stdin: &Mutex<ChildStdin>, msg: &Value) {
 }
 
 /// Runs one Codex turn in the bot's container.
-pub fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
+pub(crate) fn run(t: Turn) -> (Arc<Handle>, async_channel::Receiver<Ev>) {
     spawn(t.bot, move |h, send| turn(&t, h, send))
 }
 
@@ -127,7 +127,7 @@ fn converse(t: &Turn, h: &Handle, send: &dyn Fn(Ev), rpc: &mut Rpc) -> Result<bo
 }
 
 /// Turns one app-server notification into events.
-pub fn parse(v: &Value) -> Vec<Ev> {
+pub(crate) fn parse(v: &Value) -> Vec<Ev> {
     let p = &v["params"];
     let item = &p["item"];
     let s = |x: &Value| x.as_str().unwrap_or_default().to_string();
@@ -204,7 +204,7 @@ fn meter(r: &Value) -> Meter {
 }
 
 /// Plan usage and the models this account can use, from a throwaway container.
-pub fn account() -> Result<(Meter, Vec<Model>), String> {
+pub(crate) fn account() -> Result<(Meter, Vec<Model>), String> {
     sandbox::ready(&|_| {})?;
     let (mut child, mut rpc) = Rpc::start(sandbox::codex_oneshot())?;
     let result = (|| {

@@ -39,7 +39,7 @@ fn bundled() -> bool {
 }
 
 /// Asks for permission (macOS shows it once) and routes clicks to `clicks`.
-pub fn init(clicks: async_channel::Sender<Action>) {
+pub(crate) fn init(clicks: async_channel::Sender<Action>) {
     if !bundled() {
         return;
     }
@@ -53,7 +53,7 @@ pub fn init(clicks: async_channel::Sender<Action>) {
 }
 
 /// Shows a notification; a click opens `bot`. Grouped per bot in Notification Center.
-pub fn send(bot: usize, title: &str, body: &str) {
+pub(crate) fn send(bot: usize, title: &str, body: &str) {
     if !bundled() {
         return;
     }

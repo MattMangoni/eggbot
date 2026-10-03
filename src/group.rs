@@ -9,30 +9,30 @@ use crate::memory::{self, Update};
 
 /// Saved in `state.json`. `members` are bot ids. The notes file is `groups/<id>/NOTES.md`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Group {
-    pub id: usize,
-    pub title: String,
-    pub members: Vec<usize>,
+pub(crate) struct Group {
+    pub(crate) id: usize,
+    pub(crate) title: String,
+    pub(crate) members: Vec<usize>,
 }
 
 impl Group {
-    pub fn new(id: usize, title: String) -> Self {
+    pub(crate) fn new(id: usize, title: String) -> Self {
         Self { id, title, members: vec![] }
     }
 }
 
 /// `groups/<id>/NOTES.md` under Application Support. Not mounted in the container.
-pub fn notes_file(root: &Path, id: usize) -> PathBuf {
+pub(crate) fn notes_file(root: &Path, id: usize) -> PathBuf {
     root.join("groups").join(id.to_string()).join("NOTES.md")
 }
 
 /// Groups that list `bot`, in the order they are stored.
-pub fn of_bot(groups: &[Group], bot: usize) -> Vec<&Group> {
+pub(crate) fn of_bot(groups: &[Group], bot: usize) -> Vec<&Group> {
     groups.iter().filter(|g| g.members.contains(&bot)).collect()
 }
 
 /// Adds `id`, or removes it. A bot may belong to more than one group.
-pub fn toggle(mut members: Vec<usize>, id: usize) -> Vec<usize> {
+pub(crate) fn toggle(mut members: Vec<usize>, id: usize) -> Vec<usize> {
     if let Some(i) = members.iter().position(|m| *m == id) {
         members.remove(i);
     } else {
@@ -42,33 +42,29 @@ pub fn toggle(mut members: Vec<usize>, id: usize) -> Vec<usize> {
 }
 
 /// Drops a deleted bot. The group and its notes file stay for the others.
-pub fn forget(mut members: Vec<usize>, gone: usize) -> Vec<usize> {
+pub(crate) fn forget(mut members: Vec<usize>, gone: usize) -> Vec<usize> {
     members.retain(|id| *id != gone);
     members
 }
 
 /// Private bullets, and the group bullets this bot is allowed to write.
-pub struct Routed {
-    pub private: Vec<Update>,
+pub(crate) struct Routed {
+    pub(crate) private: Vec<Update>,
     /// Index into the `groups` slice passed to [`route`], then the bullets for that group.
-    pub shared: Vec<(usize, Vec<Update>)>,
+    pub(crate) shared: Vec<(usize, Vec<Update>)>,
 }
 
 /// Splits a learn block. `groups` are the titles of the groups this bot is in.
 /// An unnamed group bullet lands on the only group. A name matches one title, ignoring case.
 /// A shared bullet with no matching group is dropped, and it is not written to private notes.
-pub fn route(updates: &[Update], groups: &[&str]) -> Routed {
+pub(crate) fn route(updates: &[Update], groups: &[&str]) -> Routed {
     let mut private = vec![];
     let mut buckets: Vec<Vec<Update>> = vec![vec![]; groups.len()];
     for update in updates {
         match &update.group {
             None => private.push(plain(update)),
             Some(name) => {
-                let index = if name.is_empty() {
-                    (groups.len() == 1).then_some(0)
-                } else {
-                    groups.iter().position(|title| title.trim().eq_ignore_ascii_case(name))
-                };
+                let index = if name.is_empty() { (groups.len() == 1).then_some(0) } else { groups.iter().position(|title| title.trim().eq_ignore_ascii_case(name)) };
                 if let Some(index) = index {
                     buckets[index].push(plain(update));
                 }
@@ -80,7 +76,7 @@ pub fn route(updates: &[Update], groups: &[&str]) -> Routed {
 }
 
 /// The notes argument of `skills::role_text`. No groups is exactly `memory::context`.
-pub fn notes_for(private_notes: &str, groups: &[(&str, &str)]) -> String {
+pub(crate) fn notes_for(private_notes: &str, groups: &[(&str, &str)]) -> String {
     let mut out = memory::context(private_notes);
     let sole = groups.len() == 1;
     for (title, notes) in groups {
@@ -99,9 +95,13 @@ fn section(title: &str, notes: &str, sole: bool) -> String {
     let how = if sole {
         "Add a durable bullet in the same <eggbot-learn> block with a group prefix, for example `- group preference: …` (fact, lesson, and forget work too; `shared` is the same prefix). A bullet without that prefix stays private. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.".to_string()
     } else {
-        format!("Name this group in the same <eggbot-learn> block, for example `- group {title} preference: …` (`shared` is the same prefix). A bullet without that prefix stays private. An unnamed group bullet is saved only when you are in one group. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.")
+        format!(
+            "Name this group in the same <eggbot-learn> block, for example `- group {title} preference: …` (`shared` is the same prefix). A bullet without that prefix stays private. An unnamed group bullet is saved only when you are in one group. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note."
+        )
     };
-    let intro = format!("\n\nGroup notes for \"{title}\", shared by the bots in this group and no one else. These are not your private notes. The current notes above are only /memory/NOTES.md. There is no lead. {how}\n");
+    let intro = format!(
+        "\n\nGroup notes for \"{title}\", shared by the bots in this group and no one else. These are not your private notes. The current notes above are only /memory/NOTES.md. There is no lead. {how}\n"
+    );
     let notes = notes.trim();
     if notes.is_empty() {
         return intro;

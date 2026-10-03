@@ -5,14 +5,14 @@ use objc2::rc::Retained;
 use objc2_foundation::{NSAppleEventDescriptor, NSAppleEventManager};
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
-pub enum State {
+pub(crate) enum State {
     Off,
     On,
     /// Registered, but the user must allow it in System Settings → Login Items.
     NeedsApproval,
 }
 
-pub fn state() -> State {
+pub(crate) fn state() -> State {
     match unsafe { SMAppService::mainAppService().status() } {
         SMAppServiceStatus::Enabled => State::On,
         SMAppServiceStatus::RequiresApproval => State::NeedsApproval,
@@ -20,18 +20,18 @@ pub fn state() -> State {
     }
 }
 
-pub fn set(on: bool) -> Result<(), String> {
+pub(crate) fn set(on: bool) -> Result<(), String> {
     let service = unsafe { SMAppService::mainAppService() };
     let done = unsafe { if on { service.registerAndReturnError() } else { service.unregisterAndReturnError() } };
     done.map_err(|e| e.localizedDescription().to_string())
 }
 
-pub fn open_system_settings() {
+pub(crate) fn open_system_settings() {
     unsafe { SMAppService::openSystemSettingsLoginItems() };
 }
 
 /// True when macOS opened eggbot as a login item. Only valid while the app finishes launching.
-pub fn launched_at_login() -> bool {
+pub(crate) fn launched_at_login() -> bool {
     const fn code(s: &[u8; 4]) -> u32 {
         u32::from_be_bytes(*s)
     }

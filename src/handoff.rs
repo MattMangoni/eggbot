@@ -5,52 +5,52 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Chains pause after this many automatic handoffs and wait for the user.
-pub const MAX_HOPS: u32 = 3;
+pub(crate) const MAX_HOPS: u32 = 3;
 
 /// A turn waiting on a bot, or the turn that was running when eggbot quit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Pending {
-    pub prompt: String,
-    pub hops: u32,
+pub(crate) struct Pending {
+    pub(crate) prompt: String,
+    pub(crate) hops: u32,
     /// Throwaway session (schedules). Handoffs stay on the main session.
     #[serde(default)]
-    pub fresh: bool,
+    pub(crate) fresh: bool,
     /// `@Name` handoff, including Continue chain (hops reset to 0).
     #[serde(default)]
-    pub handoff: bool,
+    pub(crate) handoff: bool,
     /// Room this hop belongs to. Kept on the queue so a quit resumes the same transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub room: Option<usize>,
+    pub(crate) room: Option<usize>,
     /// Typed while the bot was working. Its chat bubble is added when the turn starts, not mid-reply.
     #[serde(default)]
-    pub typed: bool,
+    pub(crate) typed: bool,
 }
 
 impl Pending {
-    pub fn user(prompt: String) -> Self {
+    pub(crate) fn user(prompt: String) -> Self {
         Self { prompt, hops: 0, fresh: false, handoff: false, room: None, typed: false }
     }
 
-    pub fn typed(prompt: String) -> Self {
+    pub(crate) fn typed(prompt: String) -> Self {
         Self { typed: true, ..Self::user(prompt) }
     }
 
-    pub fn handoff(prompt: String, hops: u32) -> Self {
+    pub(crate) fn handoff(prompt: String, hops: u32) -> Self {
         Self { prompt, hops, fresh: false, handoff: true, room: None, typed: false }
     }
 
-    pub fn schedule(prompt: String) -> Self {
+    pub(crate) fn schedule(prompt: String) -> Self {
         Self { prompt, hops: 0, fresh: true, handoff: false, room: None, typed: false }
     }
 
     /// This hop must be restarted after a quit or crash. User turns and schedules stay stopped.
-    pub fn inflight(&self) -> bool {
+    pub(crate) fn inflight(&self) -> bool {
         self.handoff && !self.fresh
     }
 }
 
 /// Puts an interrupted handoff back at the front of `queue`. Other running turns were stopped.
-pub fn restore(running: Option<Pending>, mut queue: Vec<Pending>) -> Vec<Pending> {
+pub(crate) fn restore(running: Option<Pending>, mut queue: Vec<Pending>) -> Vec<Pending> {
     if let Some(turn) = running.filter(Pending::inflight) {
         queue.insert(0, turn);
     }
@@ -58,7 +58,7 @@ pub fn restore(running: Option<Pending>, mut queue: Vec<Pending>) -> Vec<Pending
 }
 
 /// The next turn to start. A busy bot, or one whose machine is offline, keeps the whole queue.
-pub fn dequeue(mut queue: Vec<Pending>, busy: bool, offline: bool) -> (Option<Pending>, Vec<Pending>) {
+pub(crate) fn dequeue(mut queue: Vec<Pending>, busy: bool, offline: bool) -> (Option<Pending>, Vec<Pending>) {
     if busy || offline || queue.is_empty() {
         return (None, queue);
     }
@@ -67,16 +67,14 @@ pub fn dequeue(mut queue: Vec<Pending>, busy: bool, offline: bool) -> (Option<Pe
 }
 
 /// Ids of the bots mentioned as `@Name` (case-insensitive, longest name wins: "@Reviewer 2" is not "@Reviewer").
-pub fn mentions(text: &str, bots: &[(usize, &str)], sender: usize) -> Vec<usize> {
+pub(crate) fn mentions(text: &str, bots: &[(usize, &str)], sender: usize) -> Vec<usize> {
     let lower = text.to_lowercase();
     let mut names: Vec<(usize, String)> = bots.iter().map(|(id, n)| (*id, n.to_lowercase())).collect();
     names.sort_by_key(|(_, n)| std::cmp::Reverse(n.len()));
     let mut found = vec![];
     for (at, _) in lower.match_indices('@') {
         let rest = &lower[at + 1..];
-        let hit = names.iter().find(|(_, n)| {
-            rest.starts_with(n.as_str()) && !rest[n.len()..].starts_with(|c: char| c.is_alphanumeric())
-        });
+        let hit = names.iter().find(|(_, n)| rest.starts_with(n.as_str()) && !rest[n.len()..].starts_with(|c: char| c.is_alphanumeric()));
         if let Some((id, _)) = hit
             && *id != sender
             && !found.contains(id)
@@ -88,7 +86,7 @@ pub fn mentions(text: &str, bots: &[(usize, &str)], sender: usize) -> Vec<usize>
 }
 
 /// Puts `name` at the front and drops duplicates past `limit`.
-pub fn remember(mut recent: Vec<String>, name: &str, limit: usize) -> Vec<String> {
+pub(crate) fn remember(mut recent: Vec<String>, name: &str, limit: usize) -> Vec<String> {
     recent.retain(|n| !n.eq_ignore_ascii_case(name));
     recent.insert(0, name.to_string());
     recent.truncate(limit);
@@ -96,7 +94,7 @@ pub fn remember(mut recent: Vec<String>, name: &str, limit: usize) -> Vec<String
 }
 
 /// `names` is newest-first. Drops anyone no longer on the roster.
-pub fn recent<'a>(names: &'a [String], alive: &[&str], limit: usize) -> Vec<&'a str> {
+pub(crate) fn recent<'a>(names: &'a [String], alive: &[&str], limit: usize) -> Vec<&'a str> {
     let mut out: Vec<&'a str> = vec![];
     for name in names {
         let known = alive.iter().any(|a| a.eq_ignore_ascii_case(name));
@@ -114,7 +112,7 @@ pub fn recent<'a>(names: &'a [String], alive: &[&str], limit: usize) -> Vec<&'a 
 
 /// Added to every bot's role: who the peers are, when to call them, recent deliveries, and room peers.
 /// `recent` is newest-first. `rooms` is `(title, peer names)` for rooms this bot is in.
-pub fn roster(bots: &[(usize, &str, &str)], me: usize, recent: &[&str], rooms: &[(&str, &[&str])]) -> String {
+pub(crate) fn roster(bots: &[(usize, &str, &str)], me: usize, recent: &[&str], rooms: &[(&str, &[&str])]) -> String {
     let others: Vec<String> = bots.iter().filter(|(id, ..)| *id != me).map(|(_, name, blurb)| format!("@{name} ({blurb})")).collect();
     let mut parts = vec![];
     if !others.is_empty() {
@@ -139,7 +137,7 @@ pub fn roster(bots: &[(usize, &str, &str)], me: usize, recent: &[&str], rooms: &
 
 /// What the receiving bot is told.
 /// Each mount is `(host path, container path)`. Partial overlap is spelled out; see `docs/kb/handoff.md`.
-pub fn prompt(from: &str, text: &str, mine: &[(&Path, &str)], theirs: &[(&Path, &str)]) -> String {
+pub(crate) fn prompt(from: &str, text: &str, mine: &[(&Path, &str)], theirs: &[(&Path, &str)]) -> String {
     format!("Handoff from {from}, another bot in eggbot. {}\n\n{text}", folder_context(mine, theirs))
 }
 
@@ -322,5 +320,18 @@ mod tests {
         assert_eq!(recent(&names, &["Implementer", "Designer"], 4), vec!["Implementer", "Designer"]);
         assert_eq!(recent(&names, &["Designer"], 4), vec!["Designer"]);
         assert_eq!(recent(&names, &["Implementer", "Designer"], 1), vec!["Implementer"]);
+    }
+
+    #[test]
+    fn room_kickoff_resumes_like_a_handoff_without_spending_a_hop() {
+        let prompt = crate::room::prompt("Standup", "What shipped?", &[crate::room::Peer { name: "Implementer", blurb: "Writes code" }]);
+        let mut turn = Pending::handoff(prompt, 0);
+        turn.room = Some(4);
+        assert!(turn.inflight());
+        assert_eq!(turn.hops, 0);
+        assert!(!turn.fresh);
+        let restored = restore(Some(turn), vec![]);
+        assert_eq!(restored[0].room, Some(4));
+        assert_eq!(restored[0].hops, 0);
     }
 }

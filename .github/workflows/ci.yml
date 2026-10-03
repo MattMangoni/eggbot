@@ -16,9 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      # warn only: AGENTS.md asks for files of 200–600 lines, this never fails the build
+      - name: File sizes
+        run: |
+          find src -name '*.rs' | sort | while read -r f; do
+            n=$(wc -l < "$f" | tr -d ' ')
+            if [ "$n" -gt 600 ]; then echo "::warning file=$f::$n lines (AGENTS.md aims for 200–600)"; fi
+          done
       # GPUI compiles Metal shaders at build time; newer Xcode ships the Metal compiler separately
       - name: Metal toolchain
         run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --locked
       - run: cargo test --locked

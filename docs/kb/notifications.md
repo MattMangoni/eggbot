@@ -7,7 +7,7 @@
 - A turn fails (not stopped by the user) → "<Bot> needs you" with the error.
 - Mid-chain replies stay silent; only the end of the chain speaks.
 
-`Eggbot::alert` decides: nothing if the window is active and the bot is selected; otherwise the bot gets `unread` (sidebar dot, menu bar badge); a macOS notification only when the window is not active.
+`Eggbot::alert` (`src/app/chat.rs`) decides: nothing if the window is active and the bot is selected; otherwise the bot gets `unread` (sidebar dot, menu bar badge); a macOS notification only when the window is not active.
 
 ## Quiet scheduled runs
 
