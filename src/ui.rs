@@ -1146,12 +1146,12 @@ impl Eggbot {
             .id("room-memory")
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_2()
             .flex_none()
             .max_h(px(180.))
             .overflow_y_scroll()
             .px_6()
-            .py_3()
+            .py_4()
             .border_b_1()
             .border_color(p.line)
             .child(div().text_xs().text_color(p.muted).child("Memory"))
@@ -1231,7 +1231,7 @@ impl Eggbot {
                 .child(div().h(px(1.)).bg(p.line))
                 .child(label("Bots"))
                 .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
-                .children(roster)
+                .child(div().flex().flex_col().gap_1().children(roster))
                 .child(
                     div()
                         .flex()
@@ -1281,7 +1281,7 @@ impl Eggbot {
             .px_4()
             .pt(px(if ix == 0 { 20. } else { 8. }))
             .when(last, |d| d.pb(px(20.)))
-            .child(div().w_full().max_w(px(READ_W + 16.)).px_2().py_1().child(el))
+            .child(div().w_full().max_w(px(READ_W + 16.)).px_2().py_1().rounded(px(10.)).child(el))
             .into_any_element()
     }
 
@@ -1295,7 +1295,7 @@ impl Eggbot {
                         .max_w(relative(0.75))
                         .flex()
                         .flex_col()
-                        .gap_1()
+                        .gap_2()
                         .px_4()
                         .py_2()
                         .rounded(px(18.))
@@ -1310,7 +1310,7 @@ impl Eggbot {
                                 .on_click(cx.listener(move |this, _, window, cx| this.open_bot(to, window, cx)))
                                 .child(format!("Kickoff · {name}")),
                         )
-                        .child(div().text_color(p.ink).child(text.clone())),
+                        .child(div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(text.clone())),
                 )
             }
             crate::room::Event::Reply { bot, name, color, text } => {
@@ -1475,7 +1475,7 @@ impl Eggbot {
                 .child(div().h(px(1.)).bg(p.line))
                 .child(label("Bots"))
                 .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
-                .children(roster)
+                .child(div().flex().flex_col().gap_1().children(roster))
                 .child(
                     div()
                         .flex()
