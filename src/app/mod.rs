@@ -8,7 +8,7 @@ use gpui_kit::*;
 
 use crate::app::bot::Bot;
 use crate::app::setup::Setup;
-use crate::app::state::{Saved, data_dir, default_sidebar, default_sidebar_open};
+use crate::app::state::{default_sidebar, default_sidebar_open};
 use crate::claude::{Meter, Provider};
 use crate::ui::composer::Choice;
 use crate::ui::theme::{Appearance, Palette};
@@ -283,7 +283,7 @@ impl Eggbot {
         })
         .detach();
         let p = Palette::apply(window, cx);
-        let saved: Option<Saved> = std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let saved = state::load();
         let appearance = saved.as_ref().map_or_else(Appearance::default, |s| s.appearance);
         let first_launch = saved.is_none();
         let mut this = Self {
@@ -356,20 +356,7 @@ impl Eggbot {
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
         match saved {
-            Some(s) if !s.bots.is_empty() || !s.rooms.is_empty() || !s.groups.is_empty() => {
-                (this.bots, this.next_id, this.meters, this.sidebar_w, this.sidebar_open, this.shared, this.throttle, this.pause) =
-                    (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
-                for b in &mut this.bots {
-                    sandbox::adopt_legacy(&mut b.folders, b.folder.take());
-                }
-                this.rooms = s.rooms;
-                let used = this.rooms.iter().map(|r| r.id.saturating_add(1)).max().unwrap_or(0);
-                this.next_room_id = s.next_room_id.max(used);
-                this.groups = s.groups;
-                let used = this.groups.iter().map(|g| g.id.saturating_add(1)).max().unwrap_or(0);
-                this.next_group_id = s.next_group_id.max(used);
-                this.restore_handoffs();
-            }
+            Some(s) if s.has_content() => this.restore(s),
             _ => {
                 for i in 0..3 {
                     this.hatch(i);

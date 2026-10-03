@@ -34,22 +34,6 @@ impl Eggbot {
         self.start_turn(id, pending, cx);
     }
 
-    /// An in-flight @Name hop goes back on the queue. User turns and schedules stay stopped.
-    pub(crate) fn restore_handoffs(&mut self) {
-        let mut changed = false;
-        for b in &mut self.bots {
-            if b.current.is_none() {
-                continue;
-            }
-            changed = true;
-            let running = b.current.take();
-            b.queue = handoff::restore(running, std::mem::take(&mut b.queue));
-        }
-        if changed {
-            self.save();
-        }
-    }
-
     /// Starts the head of each idle bot's queue once Docker is up and the usage guard allows it.
     /// Offline, paused, or throttled-behind-another-bot: the queue is not touched.
     pub(crate) fn pump_queues(&mut self, online: bool, prefer: Option<usize>, cx: &mut Context<Self>) {

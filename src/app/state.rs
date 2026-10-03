@@ -8,7 +8,7 @@ use super::Eggbot;
 use super::bot::Bot;
 use crate::claude::Meter;
 use crate::ui::theme::Appearance;
-use crate::{group, room, usage};
+use crate::{group, handoff, room, sandbox, usage};
 
 /// "Instructions for all bots" until the user edits them in Settings.
 pub(crate) const SHARED: &str = "Reply in concise GitHub-flavored markdown.";
@@ -67,7 +67,40 @@ pub(crate) fn default_pause() -> f32 {
     usage::DEFAULT_PAUSE
 }
 
+/// `state.json` from the last run. None on first launch, and also when the file does not parse.
+pub(crate) fn load() -> Option<Saved> {
+    std::fs::read(data_dir().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+impl Saved {
+    /// A file without bots, rooms, or groups hatches the starter bots instead.
+    pub(crate) fn has_content(&self) -> bool {
+        !self.bots.is_empty() || !self.rooms.is_empty() || !self.groups.is_empty()
+    }
+
+    /// Brings an older file up to date: a single `folder` becomes a mount, the next room and group ids
+    /// clear every saved id, and an in-flight `@Name` hop goes back on its queue (user turns and schedules stay stopped).
+    pub(crate) fn migrate(&mut self) {
+        for b in &mut self.bots {
+            sandbox::adopt_legacy(&mut b.folders, b.folder.take());
+            b.queue = handoff::restore(b.current.take(), std::mem::take(&mut b.queue));
+        }
+        let used = self.rooms.iter().map(|r| r.id.saturating_add(1)).max().unwrap_or(0);
+        self.next_room_id = self.next_room_id.max(used);
+        let used = self.groups.iter().map(|g| g.id.saturating_add(1)).max().unwrap_or(0);
+        self.next_group_id = self.next_group_id.max(used);
+    }
+}
+
 impl Eggbot {
+    /// Takes over a loaded file. Appearance is applied by the caller, which also saves.
+    pub(crate) fn restore(&mut self, mut s: Saved) {
+        s.migrate();
+        (self.bots, self.next_id, self.meters, self.sidebar_w, self.sidebar_open, self.shared, self.throttle, self.pause) =
+            (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
+        (self.rooms, self.next_room_id, self.groups, self.next_group_id) = (s.rooms, s.next_room_id, s.groups, s.next_group_id);
+    }
+
     pub(crate) fn save(&self) {
         let dir = data_dir();
         let state = serde_json::json!({ "next_id": self.next_id, "bots": self.bots, "meters": self.meters, "sidebar_w": self.sidebar_w, "sidebar_open": self.sidebar_open, "appearance": self.appearance, "shared": self.shared, "throttle": self.throttle, "pause": self.pause, "next_room_id": self.next_room_id, "rooms": self.rooms, "next_group_id": self.next_group_id, "groups": self.groups });
@@ -227,5 +260,22 @@ mod tests {
         let again: Saved = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
         assert_eq!(again.groups, saved.groups);
         assert_eq!(again.next_group_id, 4);
+    }
+
+    #[test]
+    fn migrate_folds_old_fields_and_requeues_an_interrupted_hop() {
+        let raw = r#"{"next_id":3,"next_group_id":1,"bots":[{"id":1,"name":"Reviewer","preset":0,"sandbox_session":null,"msgs":[],"folder":"/no/such/eggbot-proj","queue":[{"prompt":"later","hops":1,"handoff":true}],"current":{"prompt":"look","hops":2,"handoff":true}},{"id":2,"name":"Implementer","preset":1,"sandbox_session":null,"msgs":[],"current":{"prompt":"hi","hops":0}}],"rooms":[{"id":4,"title":"S","kickoff":"","members":[]}],"groups":[{"id":7,"title":"G","members":[]}]}"#;
+        let mut saved: Saved = serde_json::from_str(raw).unwrap();
+        assert!(saved.has_content());
+        saved.migrate();
+        let first = &saved.bots[0];
+        assert!(first.folder.is_none());
+        assert_eq!(first.folders[0].name, "eggbot-proj");
+        assert_eq!(first.queue.iter().map(|p| p.prompt.as_str()).collect::<Vec<_>>(), ["look", "later"]);
+        assert!(first.current.is_none());
+        // a user turn that was running stays stopped
+        assert!(saved.bots[1].queue.is_empty() && saved.bots[1].current.is_none());
+        assert_eq!((saved.next_room_id, saved.next_group_id), (5, 8));
+        assert!(!Saved::default().has_content());
     }
 }
