@@ -164,15 +164,7 @@ impl Eggbot {
     fn group_notes(&self, group_id: usize) -> AnyElement {
         let p = self.p;
         let notes = std::fs::read_to_string(crate::group::notes_file(&crate::app::state::data_dir(), group_id)).unwrap_or_default();
-        // Markdown headings render far larger than the panel text, so section titles show as bold labels.
-        let notes = notes
-            .lines()
-            .filter(|line| !line.starts_with("# "))
-            .map(|line| line.strip_prefix("## ").map_or(line.to_string(), |h| format!("**{}**", h.trim())))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string();
+        let notes = crate::memory::as_labels(&notes);
         div()
             .flex()
             .flex_col()

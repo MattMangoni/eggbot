@@ -18,7 +18,7 @@ use crate::egg::{Mood, egg};
 use crate::{handoff, usage};
 
 impl Eggbot {
-    pub(crate) fn chat(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn chat(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().bg(p.bg);
         if let Some(setup) = &self.setup {
@@ -69,16 +69,16 @@ impl Eggbot {
                 .pb(px(80.))
                 .child(egg(format!("hero-{}", bot.id), hex(bot.color()), 32., bot.mood()))
                 .child(div().mt_4().mb_6().text_2xl().text_color(p.ink).child(format!("What should {} work on?", bot.name)))
-                .child(div().w_full().max_w(px(READ_W)).child(self.composer(bot, cx)))
+                .child(div().w_full().max_w(px(READ_W)).child(self.composer(bot, window, cx)))
                 .into_any_element()
         } else {
             // a virtual list: only the messages on screen (plus some overdraw) are drawn
             let msgs = list(self.list.clone(), cx.processor(|this: &mut Self, ix: usize, _, cx| this.row(ix, cx))).flex_1();
-            div().flex_1().min_h_0().flex().flex_col().child(msgs).child(div().px_6().pb_4().child(div().max_w(px(READ_W)).mx_auto().w_full().child(self.composer(bot, cx)))).into_any_element()
+            div().flex_1().min_h_0().flex().flex_col().child(msgs).child(div().px_6().pb_4().child(div().max_w(px(READ_W)).mx_auto().w_full().child(self.composer(bot, window, cx)))).into_any_element()
         };
 
         // new id per bot, so switching bots replays the fade
-        main.child(self.topbar(bot, cx))
+        main.child(self.topbar(bot, window, cx))
             .children(panels)
             .child(div().flex_1().min_h_0().flex().flex_col().child(body).with_animation(
                 ElementId::Name(format!("chat-{}", bot.id).into()),

@@ -224,20 +224,43 @@ impl Eggbot {
             )
     }
 
-    /// A section title with its + button; the button lines up with the one in the sidebar header.
-    fn nav_header(&self, title: &'static str, plus: Stateful<Div>) -> Div {
+    /// A section title that folds its list, with a + button that does not; the button lines up with the one in the sidebar header.
+    fn nav_header(&self, title: &'static str, collapsed: bool, toggle: Stateful<Div>, plus: Stateful<Div>) -> Div {
         let p = self.p;
-        div().h(px(32.)).flex_none().flex().items_center().pl_4().pr_2().child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.muted).child(title)).child(
-            plus.size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .text_color(p.muted)
-                .cursor_pointer()
-                .hover(|d| d.bg(p.hover).text_color(p.ink))
-                .child(Icon::new(IconName::Plus).size_4()),
-        )
+        let chevron = if collapsed { IconName::ChevronRight } else { IconName::ChevronDown };
+        div()
+            .h(px(32.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .pl_4()
+            .pr_2()
+            .child(
+                toggle
+                    .h_full()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(p.muted)
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(p.ink))
+                    .child(title)
+                    .child(Icon::new(chevron).size_3()),
+            )
+            .child(
+                plus.size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .text_color(p.muted)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.hover).text_color(p.ink))
+                    .child(Icon::new(IconName::Plus).size_4()),
+            )
     }
 
     /// Rooms sit under the bot list: a title, who is in, and a dot when a member has news.
@@ -252,21 +275,27 @@ impl Eggbot {
                 (Some(b), _) => b.name.clone(),
                 _ => "No bots yet".into(),
             };
-            let icon = div().size(px(9.)).rounded(px(2.)).border_1().border_color(if on { p.ink } else { p.muted });
+            let icon = Icon::new(IconName::MessagesSquare).size_4().text_color(if on { p.ink } else { p.muted });
             self.nav_row(("room", id), on, icon, r.title.clone(), subtitle)
                 .on_click(cx.listener(move |this, _, window, cx| this.show_room(id, window, cx)))
                 .when(r.unread && !on, |d| d.child(div().size(px(7.)).flex_none().rounded_full().bg(p.ink)))
         });
+        let collapsed = self.rooms_collapsed;
+        let toggle = div().id("toggle-rooms").on_click(cx.listener(|this, _, _, cx| {
+            this.rooms_collapsed = !this.rooms_collapsed;
+            this.save();
+            cx.notify();
+        }));
         let plus = div().id("new-room").on_click(cx.listener(|this, _, window, cx| this.new_room(window, cx)));
         div()
             .flex_none()
             .flex()
             .flex_col()
-            .pb_2()
+            .when(!collapsed, |d| d.pb_2())
             .border_t_1()
             .border_color(p.line)
-            .child(self.nav_header("Rooms", plus))
-            .child(div().id("room-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows))
+            .child(self.nav_header("Rooms", collapsed, toggle, plus))
+            .when(!collapsed, |d| d.child(div().id("room-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows)))
     }
 
     /// Groups sit under rooms. A group shares notes; it has no transcript and no facilitator.
@@ -281,19 +310,25 @@ impl Eggbot {
                 [one] => one.clone(),
                 [first, rest @ ..] => format!("{first} + {}", rest.len()),
             };
-            let icon = Icon::new(IconName::Network).size_4().text_color(if on { p.ink } else { p.muted });
+            let icon = Icon::new(IconName::Users).size_4().text_color(if on { p.ink } else { p.muted });
             self.nav_row(("group", id), on, icon, g.title.clone(), subtitle).on_click(cx.listener(move |this, _, window, cx| this.show_group(id, window, cx)))
         });
+        let collapsed = self.groups_collapsed;
+        let toggle = div().id("toggle-groups").on_click(cx.listener(|this, _, _, cx| {
+            this.groups_collapsed = !this.groups_collapsed;
+            this.save();
+            cx.notify();
+        }));
         let plus = div().id("new-group").on_click(cx.listener(|this, _, window, cx| this.new_group(window, cx)));
         div()
             .flex_none()
             .flex()
             .flex_col()
-            .pb_2()
+            .when(!collapsed, |d| d.pb_2())
             .border_t_1()
             .border_color(p.line)
-            .child(self.nav_header("Groups", plus))
-            .child(div().id("group-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows))
+            .child(self.nav_header("Groups", collapsed, toggle, plus))
+            .when(!collapsed, |d| d.child(div().id("group-list").max_h(px(ROW_H * 2. + ROW_GAP)).overflow_y_scroll().flex().flex_col().gap(px(ROW_GAP)).px_2().children(rows)))
     }
 
     fn usage_meter(&self, meter: &Meter) -> impl IntoElement {

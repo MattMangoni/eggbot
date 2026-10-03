@@ -19,7 +19,7 @@ use gpui_kit::assets::Assets;
 use gpui_kit::*;
 
 // the default bundle has only the component icons; add the extra ones we use
-gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil, CircleCheck, CircleDashed]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil, CircleCheck, CircleDashed, Users, MessagesSquare]);
 
 struct AppAssets;
 

@@ -85,6 +85,9 @@ pub(crate) struct Eggbot {
     pub(crate) sidebar_w: f32,
     /// Bot list visible. The width is kept while it is closed.
     pub(crate) sidebar_open: bool,
+    /// The Rooms and Groups lists are folded to their titles.
+    pub(crate) rooms_collapsed: bool,
+    pub(crate) groups_collapsed: bool,
     pub(crate) appearance: Appearance,
     /// Shown under the composer when adding a folder is refused.
     pub(crate) folder_error: Option<String>,
@@ -140,8 +143,11 @@ impl Eggbot {
             input
         });
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = ev {
-                this.send(window, cx);
+            match ev {
+                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                // the send button and the focus border follow the box
+                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                _ => {}
             }
         })
         .detach();
@@ -150,7 +156,7 @@ impl Eggbot {
             InputEvent::Change => this.find_update(cx),
             // Enter walks back in time, ⇧Enter forward
             InputEvent::PressEnter { shift, .. } => this.find_step(if *shift { 1 } else { -1 }, cx),
-            _ => {}
+            InputEvent::Focus | InputEvent::Blur => cx.notify(),
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| {
@@ -288,6 +294,8 @@ impl Eggbot {
             selects_stale: true,
             sidebar_w: default_sidebar(),
             sidebar_open: default_sidebar_open(),
+            rooms_collapsed: false,
+            groups_collapsed: false,
             appearance,
             folder_error: None,
             active: false,
@@ -321,14 +329,15 @@ impl Eggbot {
         };
         this.list.set_follow_mode(FollowMode::Tail);
         this.room_list.set_follow_mode(FollowMode::Tail);
-        match saved {
-            Some(s) if s.has_content() => this.restore(s),
-            _ => {
-                for i in 0..3 {
-                    this.hatch(i);
-                }
-                this.selected = 0;
+        let starters = !saved.as_ref().is_some_and(state::Saved::has_content);
+        if let Some(s) = saved {
+            this.restore(s);
+        }
+        if starters {
+            for i in 0..3 {
+                this.hatch(i);
             }
+            this.selected = 0;
         }
         if let (Some(t), Some(b)) = (notice, this.bots.first_mut()) {
             b.msgs.push(Msg::Error(t));
