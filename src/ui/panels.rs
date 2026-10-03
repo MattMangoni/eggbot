@@ -8,12 +8,12 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::theme::hex;
 use super::{button, divider, field, heading, label, link, primary};
 use crate::app::bot::{Bot, SHELLS};
 use crate::app::setup::{Check, Setup};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
-use crate::ui::theme::hex;
 use crate::usage;
 use crate::{login, sandbox};
 

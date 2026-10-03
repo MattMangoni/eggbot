@@ -10,11 +10,11 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::theme::hex;
 use super::{TRAFFIC_INSET, bar, button, divider};
 use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
-use crate::ui::theme::hex;
 
 impl Eggbot {
     /// The top-bar folders button: "Add folder" with none, else the folder name or count, opening a list to remove or add.

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
+use super::state::data_dir;
 use super::{Eggbot, Panel};
-use crate::app::state::data_dir;
 use crate::claude::Provider;
 use crate::egg::Mood;
 use crate::ui::composer::parse_model_value;

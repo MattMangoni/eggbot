@@ -8,11 +8,11 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::theme::hex;
 use super::{READ_W, TRAFFIC_INSET, button, divider, field, label, primary};
 use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
 use crate::handoff;
-use crate::ui::theme::hex;
 
 impl Eggbot {
     /// The room's transcript, then the roster. Start still talks to the facilitator only.

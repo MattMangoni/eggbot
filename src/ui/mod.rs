@@ -4,7 +4,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app::Eggbot;
-use crate::ui::theme::Palette;
+use theme::Palette;
 
 mod chat;
 pub(crate) mod composer;

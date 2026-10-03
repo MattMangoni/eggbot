@@ -8,12 +8,12 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::theme::{Palette, hex};
 use super::{TRAFFIC_INSET, bar, heading, soft_shadow};
 use crate::app::Eggbot;
 use crate::app::bot::{PRESETS, drop_index};
 use crate::claude::Meter;
 use crate::egg::{Mood, egg};
-use crate::ui::theme::{Palette, hex};
 use crate::usage;
 
 const ROW_H: f32 = 48.;

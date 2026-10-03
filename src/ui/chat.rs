@@ -8,13 +8,13 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::theme::hex;
 use super::{READ_W, button};
 use crate::app::bot::{Bot, Msg};
 use crate::app::setup::needs_login;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::egg::{Mood, egg};
-use crate::ui::theme::hex;
 use crate::{handoff, usage};
 
 impl Eggbot {

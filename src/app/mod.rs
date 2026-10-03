@@ -6,13 +6,13 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 
-use crate::app::bot::Bot;
-use crate::app::setup::Setup;
-use crate::app::state::{default_sidebar, default_sidebar_open};
 use crate::claude::{Meter, Provider};
 use crate::ui::composer::Choice;
 use crate::ui::theme::{Appearance, Palette};
 use crate::{codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
+use bot::Bot;
+use setup::Setup;
+use state::{default_sidebar, default_sidebar_open};
 
 pub(crate) mod actions;
 pub(crate) mod bot;
