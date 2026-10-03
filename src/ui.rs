@@ -1029,13 +1029,20 @@ impl Eggbot {
             }
         };
         let (last, hit) = (ix == bot.msgs.len(), self.find_current() == Some(ix));
+        // more air before a new request, less between consecutive tool lines
+        let top = match (ix.checked_sub(1).and_then(|j| bot.msgs.get(j)), bot.msgs.get(ix)) {
+            (None, _) => 20.,
+            (Some(Msg::Tool { .. }), Some(Msg::Tool { .. })) => 0.,
+            (_, Some(Msg::User(_) | Msg::Kickoff { .. } | Msg::Scheduled { .. } | Msg::Handoff { .. })) => 16.,
+            _ => 8.,
+        };
         // the 8px inset leaves room for the search highlight without moving the text
         div()
             .w_full()
             .flex()
             .justify_center()
             .px_4()
-            .pt(px(if ix == 0 { 20. } else { 8. }))
+            .pt(px(top))
             .when(last, |d| d.pb(px(20.)))
             .child(div().w_full().max_w(px(READ_W + 16.)).px_2().py_1().rounded(px(10.)).when(hit, |d| d.bg(self.p.tint)).child(el))
             .into_any_element()
