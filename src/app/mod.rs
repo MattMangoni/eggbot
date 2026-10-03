@@ -14,6 +14,7 @@ use crate::ui::composer::Choice;
 use crate::ui::theme::{Appearance, Palette};
 use crate::{codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
 
+pub(crate) mod actions;
 pub(crate) mod bot;
 mod chat;
 mod handoffs;

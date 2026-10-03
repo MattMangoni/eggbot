@@ -5,7 +5,7 @@ use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
 use crate::app::Eggbot;
-use crate::set_menus;
+use crate::app::actions::set_menus;
 
 /// Light or dark, chosen in the View menu.
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema, Action)]

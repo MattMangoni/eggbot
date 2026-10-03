@@ -1,11 +1,10 @@
-//! Everything eggbot draws. State and behaviour live in `main.rs`.
+//! Everything eggbot draws: the root view and the widgets every area shares. State and behaviour live in `app/`.
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::app::{Eggbot, Panel};
-use crate::ui::theme::{Appearance, Palette};
-use crate::{CloseWindow, CycleAppearance, Dismiss, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar, set_dock_icon};
+use crate::app::Eggbot;
+use crate::ui::theme::Palette;
 
 mod chat;
 pub(crate) mod composer;
@@ -78,7 +77,7 @@ impl Render for Eggbot {
         self.sync_list();
         self.sync_room_list();
         // no background here: the window is blurred behind the translucent sidebar
-        div()
+        let root = div()
             .size_full()
             .flex()
             .text_color(self.p.ink)
@@ -98,58 +97,7 @@ impl Render for Eggbot {
                         cx.notify();
                     }
                 }),
-            )
-            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_quit(window, cx)))
-            .on_action(cx.listener(|this, _: &NewBot, _, cx| {
-                // the hatch menu lives in the sidebar
-                if !this.sidebar_open {
-                    this.toggle_sidebar(cx);
-                    this.menu_open = true;
-                } else {
-                    this.menu_open = !this.menu_open;
-                }
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &FocusInput, window, cx| this.focus_main(window, cx)))
-            .on_action(cx.listener(|this, _: &PrevBot, window, cx| {
-                if this.selected > 0 {
-                    this.select(this.selected - 1, window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &NextBot, window, cx| {
-                if this.selected + 1 < this.bots.len() {
-                    this.select(this.selected + 1, window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, SelectBot(n): &SelectBot, window, cx| {
-                if *n < this.bots.len() {
-                    this.select(*n, window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, a: &Appearance, window, cx| this.set_appearance(*a, window, cx)))
-            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
-            .on_action(cx.listener(|this, _: &OpenSetup, _, cx| this.open_setup(cx)))
-            .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| this.set_appearance(this.appearance.next(), window, cx)))
-            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-            .on_action(cx.listener(|this, _: &StopTurn, _, cx| this.stop(cx)))
-            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                if this.menu_open {
-                    this.menu_open = false;
-                    cx.notify();
-                } else if this.find_open {
-                    this.close_find(window, cx);
-                } else if this.panel != Panel::None {
-                    this.close_panel(window, cx);
-                } else if this.open_room.is_none() && this.open_group.is_none() {
-                    this.stop(cx);
-                }
-            }))
-            .on_action(cx.listener(|_, _: &CloseWindow, _, cx| {
-                cx.hide();
-                set_dock_icon(false);
-            }))
-            .when(self.sidebar_open, |d| d.child(self.sidebar(cx)))
-            .child(self.chat(cx))
+            );
+        Self::on_actions(root, cx).when(self.sidebar_open, |d| d.child(self.sidebar(cx))).child(self.chat(cx))
     }
 }

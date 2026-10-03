@@ -15,17 +15,8 @@ mod tray;
 mod ui;
 mod usage;
 
-use app::Eggbot;
 use gpui_kit::assets::Assets;
 use gpui_kit::*;
-use ui::theme::Appearance;
-
-actions!(eggbot, [Quit, CloseWindow, NewBot, FocusInput, PrevBot, NextBot, StopTurn, Dismiss, CycleAppearance, OpenSettings, OpenSetup, Find, ToggleSidebar]);
-
-/// ⌘1…⌘9 selects the bot at that position.
-#[derive(Clone, PartialEq, serde::Deserialize, schemars::JsonSchema, Action)]
-#[action(namespace = eggbot)]
-struct SelectBot(usize);
 
 // the default bundle has only the component icons; add the extra ones we use
 gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Trash, Pencil, CircleCheck, CircleDashed]);
@@ -49,17 +40,6 @@ impl AssetSource for AppAssets {
     }
 }
 
-impl Eggbot {
-    /// ⌘B hides or shows the bot list. The width stays, and the choice is saved.
-    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_open = !self.sidebar_open;
-        self.resizing = false;
-        set_menus(self.appearance, self.sidebar_open, cx);
-        self.save();
-        cx.notify();
-    }
-}
-
 /// Puts macOS's "sidebar" material behind the whole window; eggbot's opaque main area paints over it.
 fn add_vibrancy(window: &Window) {
     use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode};
@@ -77,36 +57,6 @@ fn add_vibrancy(window: &Window) {
     parent.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, Some(view));
 }
 
-fn set_menus(appearance: Appearance, sidebar_open: bool, cx: &mut App) {
-    let pick = |name: &str, a: Appearance| MenuItem::Action { name: name.to_string().into(), action: Box::new(a), os_action: None, checked: a == appearance, disabled: false };
-    cx.set_menus([
-        Menu {
-            name: "eggbot".into(),
-            items: vec![
-                MenuItem::action("Settings…", OpenSettings),
-                MenuItem::action("Setup…", OpenSetup),
-                MenuItem::separator(),
-                MenuItem::action("Close Window", CloseWindow),
-                MenuItem::action("Quit eggbot", Quit),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::Action { name: "Toggle Sidebar".to_string().into(), action: Box::new(ToggleSidebar), os_action: None, checked: sidebar_open, disabled: false },
-                MenuItem::separator(),
-                pick("Match System", Appearance::System),
-                pick("Light", Appearance::Light),
-                pick("Dark", Appearance::Dark),
-                MenuItem::separator(),
-                MenuItem::action("Next Appearance", CycleAppearance),
-            ],
-            disabled: false,
-        },
-    ]);
-}
-
 /// The Dock icon shows only while the window is visible; the menu bar egg is always there.
 fn set_dock_icon(visible: bool) {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -114,12 +64,6 @@ fn set_dock_icon(visible: bool) {
         let policy = if visible { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
         NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
     }
-}
-
-#[cfg(test)]
-mod persist_tests {
-
-    // `gpui_kit::*` also exports GPUI's own `test` macro; keep the standard one
 }
 
 fn main() {
@@ -131,22 +75,7 @@ fn main() {
         gpui_kit::init(cx);
         // opened by macOS at login: start quietly, with only the menu bar egg
         let at_login = login::launched_at_login();
-        cx.bind_keys([
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("cmd-w", CloseWindow, None),
-            KeyBinding::new("cmd-n", NewBot, None),
-            KeyBinding::new("cmd-b", ToggleSidebar, None),
-            KeyBinding::new("cmd-k", FocusInput, None),
-            // ⌘[ / ⌘] are outdent/indent inside text fields, so switching uses ⌃Tab
-            KeyBinding::new("ctrl-shift-tab", PrevBot, None),
-            KeyBinding::new("ctrl-tab", NextBot, None),
-            KeyBinding::new("escape", Dismiss, None),
-            KeyBinding::new("cmd-.", StopTurn, None),
-            KeyBinding::new("cmd-shift-d", CycleAppearance, None),
-            KeyBinding::new("cmd-,", OpenSettings, None),
-            KeyBinding::new("cmd-f", Find, None),
-        ]);
-        cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectBot(n - 1), None)));
+        app::actions::bind_keys(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1080.), px(720.)), cx))),
             // transparent, with a native vibrancy view behind (GPUI's own Blurred has no effect here)
@@ -167,6 +96,3 @@ fn main() {
         }
     });
 }
-
-#[cfg(test)]
-mod tests {}
