@@ -732,15 +732,15 @@ impl Eggbot {
             .selected_value()
             .cloned()
             .flatten()
-            .and_then(|v| {
+            .map(|v| {
                 let (provider, model) = v.split_once(':').unwrap_or((v.as_str(), ""));
                 let name = MODELS.iter().find(|(a, _)| *a == Some(model)).map(|(_, l)| l.to_string()).or_else(|| self.codex_models.iter().find(|m| m.id == model).map(|m| m.name.clone()));
-                Some(match (provider, name) {
+                match (provider, name) {
                     ("codex", Some(n)) => format!("Codex · {n}"),
                     ("codex", None) => "Codex".into(),
                     (_, Some(n)) => format!("Claude · {n}"),
                     _ => "Claude".into(),
-                })
+                }
             })
             .unwrap_or_else(|| "Claude".into());
         let effort_label = bot.effort.clone().unwrap_or_else(|| "Default effort".into());

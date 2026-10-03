@@ -1270,10 +1270,8 @@ impl Eggbot {
     /// A room's own dot is its transcript, not every message a member receives.
     fn alert(&mut self, id: usize, title: &str, body: &str) {
         let seeing = self.open_room.is_none() && self.active && self.bots.get(self.selected).is_some_and(|b| b.id == id);
-        if !seeing {
-            if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
-                b.unread = true;
-            }
+        if !seeing && let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
+            b.unread = true;
         }
         if !self.active {
             let body: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
@@ -1527,7 +1525,10 @@ impl Eggbot {
                 }
             }
             if let Some(rid) = stays {
-                self.log_handoff(rid, from, &from_name, color, to, &to_name, paused);
+                self.log_room(rid, |r| {
+                    r.record_handoff(from, &from_name, color, to, &to_name, paused);
+                    true
+                });
             }
             if paused {
                 self.alert(to, "Chain paused", &format!("{from_name} handed off to {to_name} after {} hops. Open eggbot to continue.", handoff::MAX_HOPS));
@@ -1540,29 +1541,13 @@ impl Eggbot {
         handed
     }
 
-    fn log_reply(&mut self, room_id: usize, bot_id: usize, text: &str) {
-        let Some((name, color)) = self.bots.iter().find(|b| b.id == bot_id).map(|b| (b.name.clone(), b.color())) else { return };
+    /// Adds a transcript line through `record`; the room dot lights when a line was added while the room is closed.
+    fn log_room(&mut self, room_id: usize, record: impl FnOnce(&mut room::Room) -> bool) {
         let open = self.open_room == Some(room_id);
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
-        if room.record_reply(bot_id, &name, color, text) && !open {
-            room.unread = true;
-        }
-    }
-
-    fn log_handoff(&mut self, room_id: usize, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
-        let open = self.open_room == Some(room_id);
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
-        room.record_handoff(from, from_name, color, to, to_name, paused);
-        if !open {
-            room.unread = true;
-        }
-    }
-
-    fn log_trouble(&mut self, room_id: usize, bot_id: usize, text: &str) {
-        let Some(name) = self.bots.iter().find(|b| b.id == bot_id).map(|b| b.name.clone()) else { return };
-        let open = self.open_room == Some(room_id);
-        let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id) else { return };
-        if room.record_trouble(bot_id, &name, text) && !open {
+        if let Some(room) = self.rooms.iter_mut().find(|r| r.id == room_id)
+            && record(room)
+            && !open
+        {
             room.unread = true;
         }
     }
@@ -1884,7 +1869,7 @@ impl Eggbot {
                     bot.msgs.extend(tail.into_iter().filter(|m| !matches!(m, Msg::Bot(_))));
                     bot.msgs.push(Msg::Divider("Nothing to report".into()));
                 }
-                let name = bot.name.clone();
+                let (name, color) = (bot.name.clone(), bot.color());
                 // engine down: keep the hop queued instead of starting it into the same failure
                 let engine_down = failed.as_deref().is_some_and(sandbox::engine_down);
                 if engine_down && let Some(turn) = finished.filter(handoff::Pending::inflight) {
@@ -1909,19 +1894,19 @@ impl Eggbot {
                     && !quiet
                     && let Some(rid) = room_id
                 {
-                    self.log_reply(rid, id, &reply);
+                    self.log_room(rid, |r| r.record_reply(id, &name, color, &reply));
                 }
                 let handed = ok && !refreshed && !quiet && self.hand_off(id, reply.clone(), hops, room_id, cx);
                 match (stopped, failed) {
                     (false, Some(e)) => {
                         if let Some(rid) = room_id {
-                            self.log_trouble(rid, id, &e);
+                            self.log_room(rid, |r| r.record_trouble(id, &name, &e));
                         }
                         self.alert(id, &format!("{name} needs you"), &e);
                     }
                     (true, _) => {
                         if let Some(rid) = room_id {
-                            self.log_trouble(rid, id, "Stopped.");
+                            self.log_room(rid, |r| r.record_trouble(id, &name, "Stopped."));
                         }
                     }
                     (false, None) if ok && !quiet && !handed => self.alert(id, &name, &reply),
@@ -2229,10 +2214,10 @@ impl Eggbot {
     }
 
     fn remove_folder(&mut self, id: usize, index: usize, cx: &mut Context<Self>) {
-        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id) {
-            if index < bot.folders.len() {
-                bot.folders.remove(index);
-            }
+        if let Some(bot) = self.bots.iter_mut().find(|b| b.id == id)
+            && index < bot.folders.len()
+        {
+            bot.folders.remove(index);
         }
         self.folder_error = None;
         self.save();

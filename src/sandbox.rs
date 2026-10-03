@@ -129,8 +129,8 @@ pub fn ensure(bot: usize, folders: &[Mount], scratch: &Path, memory: &Path, stat
     if let Some((_, src)) = want.iter().find(|(_, src)| !mount_syntax_ok(src)) {
         return Err(format!("Docker cannot mount {src}."));
     }
-    match docker(&["inspect", "-f", INSPECT, &name]) {
-        Ok(text) => match parse_inspect(&text) {
+    if let Ok(text) = docker(&["inspect", "-f", INSPECT, &name]) {
+        match parse_inspect(&text) {
             Some(got) if got.image == image && binds_match(&got.binds, &want) => {
                 if got.running {
                     return Ok(name);
@@ -139,8 +139,7 @@ pub fn ensure(bot: usize, folders: &[Mount], scratch: &Path, memory: &Path, stat
             }
             // folder or image changed: rebuild the container (the login volume survives)
             _ => drop(docker(&["rm", "-f", &name])),
-        },
-        Err(_) => {}
+        }
     }
     status("Preparing its machine…");
     let args = run_args(&name, &image, &want);
@@ -530,7 +529,7 @@ mod tests {
     fn cwd_and_note_follow_the_mount_list() {
         assert_eq!(cwd(&[]), "/work");
         let one = mount("/repos/proj", "proj");
-        assert_eq!(cwd(&[one.clone()]), "/work/proj");
+        assert_eq!(cwd(std::slice::from_ref(&one)), "/work/proj");
         let child = mount("/repos/proj/crates", "crates");
         assert_eq!(cwd(&[one.clone(), child.clone()]), "/work");
         assert!(folders_note(&[]).is_empty());

@@ -269,10 +269,10 @@ fn forget(doc: &mut Doc, batch: &mut [Vec<String>; 3], text: &str) {
     if key.is_empty() {
         return;
     }
-    for i in 0..3 {
-        doc.sections[i].bullets.retain(|b| normalize(b) != key);
-        doc.sections[i].loose.retain(|b| normalize(b) != key);
-        batch[i].retain(|b| normalize(b) != key);
+    for (section, items) in doc.sections.iter_mut().zip(batch.iter_mut()) {
+        section.bullets.retain(|b| normalize(b) != key);
+        section.loose.retain(|b| normalize(b) != key);
+        items.retain(|b| normalize(b) != key);
     }
 }
 
