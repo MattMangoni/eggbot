@@ -99,7 +99,7 @@ impl Eggbot {
             .into_any_element()
     }
 
-    pub(crate) fn topbar(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn topbar(&self, bot: &Bot, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         div()
             .h(px(44.))
@@ -140,7 +140,7 @@ impl Eggbot {
             )
             .child(div().ml_1().child(self.folders_button(bot, cx)))
             .child(div().flex_1())
-            .child(div().mr_2().child(self.find_bar(cx)))
+            .child(div().mr_2().child(self.find_bar(window, cx)))
             .when(bot.context.1 > 0, |d| {
                 let used = bot.context.0 as f32 / bot.context.1 as f32;
                 let fill = if used >= 0.8 { p.warn } else { p.muted };
@@ -155,7 +155,7 @@ impl Eggbot {
     }
 
     /// The search field in the top bar (⌘F), or the icon that opens it.
-    fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let icon_button =
             |id: &'static str, icon: IconName| div().id(id).p_1().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(icon).size_3p5());
@@ -163,10 +163,9 @@ impl Eggbot {
             return icon_button("find", IconName::Search).on_click(cx.listener(|this, _, window, cx| this.open_find(window, cx))).into_any_element();
         }
         let typed = !self.find_input.read(cx).value().trim().is_empty();
-        let count = match (typed, self.find_hits.len()) {
-            (false, _) => String::new(),
-            (true, 0) => "No matches".into(),
-            (true, n) => format!("{} of {n}", self.find_at + 1),
+        let count = match self.find_hits.len() {
+            0 => "No matches".into(),
+            n => format!("{} of {n}", self.find_at + 1),
         };
         div()
             .flex()
@@ -177,10 +176,10 @@ impl Eggbot {
             .pr_1()
             .rounded(px(8.))
             .border_1()
-            .border_color(p.line)
+            .border_color(if self.find_input.read(cx).focus_handle(cx).is_focused(window) { p.muted } else { p.line })
             .child(Icon::new(IconName::Search).size_3p5().text_color(p.muted))
             .child(div().w(px(170.)).child(Input::new(&self.find_input).appearance(false).xsmall()))
-            .child(div().text_xs().text_color(p.muted).whitespace_nowrap().child(count))
+            .when(typed, |d| d.child(div().text_xs().text_color(p.muted).whitespace_nowrap().child(count)))
             .child(icon_button("find-older", IconName::ChevronUp).on_click(cx.listener(|this, _, _, cx| this.find_step(-1, cx))))
             .child(icon_button("find-newer", IconName::ChevronDown).on_click(cx.listener(|this, _, _, cx| this.find_step(1, cx))))
             .child(icon_button("find-close", IconName::Close).on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))

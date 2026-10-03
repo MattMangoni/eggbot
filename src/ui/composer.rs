@@ -89,10 +89,11 @@ impl Eggbot {
     }
 
     /// The input card with the model and effort dropdowns, and the folder/schedules row under it.
-    pub(crate) fn composer(&self, bot: &Bot, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn composer(&self, bot: &Bot, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.p;
         let busy = bot.busy();
-        let paused = self.paused(bot.provider);
+        // nothing to send while the box is empty, and a paused provider holds the draft
+        let off = self.paused(bot.provider) || self.input.read(cx).value().trim().is_empty();
         let send = div()
             .id("send")
             .size(px(32.))
@@ -103,9 +104,8 @@ impl Eggbot {
             .rounded_full()
             .bg(p.ink)
             .text_color(p.bg)
-            .cursor_pointer()
-            .when(paused, |d| d.opacity(0.4).cursor_default())
-            .when(!paused, |d| d.hover(|d| d.opacity(0.8)))
+            .when(off, |d| d.opacity(0.4).cursor_default())
+            .when(!off, |d| d.cursor_pointer().hover(|d| d.opacity(0.8)))
             .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
             .child(Icon::new(IconName::ArrowUp).size_4());
         let stop = busy.then(|| {
@@ -197,7 +197,7 @@ impl Eggbot {
                     .rounded(px(20.))
                     .bg(p.card)
                     .border_1()
-                    .border_color(p.line)
+                    .border_color(if self.input.read(cx).focus_handle(cx).is_focused(window) { p.muted } else { p.line })
                     .shadow(soft_shadow(p))
                     // the multi-line textarea adds its own 10px inset, so text lines up with the dropdown labels
                     .child(div().px_2().pt_2().child(Textarea::new(&self.input).appearance(false)))

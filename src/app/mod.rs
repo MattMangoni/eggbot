@@ -140,8 +140,11 @@ impl Eggbot {
             input
         });
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = ev {
-                this.send(window, cx);
+            match ev {
+                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                // the send button and the focus border follow the box
+                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                _ => {}
             }
         })
         .detach();
@@ -150,7 +153,7 @@ impl Eggbot {
             InputEvent::Change => this.find_update(cx),
             // Enter walks back in time, ⇧Enter forward
             InputEvent::PressEnter { shift, .. } => this.find_step(if *shift { 1 } else { -1 }, cx),
-            _ => {}
+            InputEvent::Focus | InputEvent::Blur => cx.notify(),
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| {

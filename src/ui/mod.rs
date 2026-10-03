@@ -117,6 +117,6 @@ impl Render for Eggbot {
                     }
                 }),
             );
-        Self::on_actions(root, cx).when(self.sidebar_open, |d| d.child(self.sidebar(cx))).child(self.chat(cx))
+        Self::on_actions(root, cx).when(self.sidebar_open, |d| d.child(self.sidebar(cx))).child(self.chat(window, cx))
     }
 }
