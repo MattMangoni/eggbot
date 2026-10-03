@@ -49,6 +49,10 @@ pub(crate) struct Saved {
     pub(crate) next_group_id: usize,
     #[serde(default)]
     pub(crate) groups: Vec<group::Group>,
+    #[serde(default)]
+    pub(crate) rooms_collapsed: bool,
+    #[serde(default)]
+    pub(crate) groups_collapsed: bool,
 }
 
 pub(crate) fn default_sidebar() -> f32 {
@@ -134,7 +138,7 @@ impl Saved {
 /// The `state.json` object, read from any value with `Saved`'s field names (`Eggbot` or `Saved`).
 macro_rules! saved_json {
     ($s:expr) => {
-        serde_json::json!({ "next_id": $s.next_id, "bots": $s.bots, "meters": $s.meters, "sidebar_w": $s.sidebar_w, "sidebar_open": $s.sidebar_open, "appearance": $s.appearance, "shared": $s.shared, "throttle": $s.throttle, "pause": $s.pause, "next_room_id": $s.next_room_id, "rooms": $s.rooms, "next_group_id": $s.next_group_id, "groups": $s.groups })
+        serde_json::json!({ "next_id": $s.next_id, "bots": $s.bots, "meters": $s.meters, "sidebar_w": $s.sidebar_w, "sidebar_open": $s.sidebar_open, "appearance": $s.appearance, "shared": $s.shared, "throttle": $s.throttle, "pause": $s.pause, "next_room_id": $s.next_room_id, "rooms": $s.rooms, "next_group_id": $s.next_group_id, "groups": $s.groups, "rooms_collapsed": $s.rooms_collapsed, "groups_collapsed": $s.groups_collapsed })
     };
 }
 
@@ -145,6 +149,7 @@ impl Eggbot {
         (self.bots, self.next_id, self.meters, self.sidebar_w, self.sidebar_open, self.shared, self.throttle, self.pause) =
             (s.bots, s.next_id, s.meters, s.sidebar_w, s.sidebar_open, s.shared, s.throttle, s.pause);
         (self.rooms, self.next_room_id, self.groups, self.next_group_id) = (s.rooms, s.next_room_id, s.groups, s.next_group_id);
+        (self.rooms_collapsed, self.groups_collapsed) = (s.rooms_collapsed, s.groups_collapsed);
     }
 
     pub(crate) fn save(&self) {
@@ -342,7 +347,7 @@ mod tests {
 
     #[test]
     fn an_empty_state_json_keeps_its_settings() {
-        let raw = r#"{"next_id":9,"bots":[],"meters":[{"provider":"Claude","windows":[{"label":"5h","used":0.5,"reset":100}],"at":50}],"sidebar_w":310.0,"sidebar_open":false,"appearance":"Dark","shared":"Be brief.","throttle":0.75,"pause":0.875,"next_room_id":4,"rooms":[],"next_group_id":6,"groups":[]}"#;
+        let raw = r#"{"next_id":9,"bots":[],"meters":[{"provider":"Claude","windows":[{"label":"5h","used":0.5,"reset":100}],"at":50}],"sidebar_w":310.0,"sidebar_open":false,"appearance":"Dark","shared":"Be brief.","throttle":0.75,"pause":0.875,"next_room_id":4,"rooms":[],"next_group_id":6,"groups":[],"rooms_collapsed":true,"groups_collapsed":false}"#;
         let mut saved: Saved = serde_json::from_str(raw).unwrap();
         assert!(!saved.has_content());
         saved.migrate();

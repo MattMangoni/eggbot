@@ -366,6 +366,12 @@ pub(crate) fn capped(notes: &str, where_rest: &str) -> String {
     format!("{}\n… (older notes omitted; the rest is in {where_rest})", notes[..cut].trim_end())
 }
 
+/// Notes for a read-only view: the `# ` title goes and `## ` headings become bold labels, since Markdown headings render far larger than panel text.
+pub(crate) fn as_labels(notes: &str) -> String {
+    let lines: Vec<String> = notes.lines().filter(|l| !l.starts_with("# ")).map(|l| l.strip_prefix("## ").map_or(l.to_string(), |h| format!("**{}**", h.trim()))).collect();
+    lines.join("\n").trim().to_string()
+}
+
 /// A note must not be able to close Codex's `<eggbot-context>` wrapper.
 pub(crate) fn neutralize(notes: &str) -> String {
     notes.replace("<eggbot-context>", "<eggbot-context >").replace("</eggbot-context>", "</eggbot-context >")
@@ -404,6 +410,12 @@ mod tests {
     fn a_bare_bullet_is_a_lesson_and_placeholders_are_dropped() {
         let (_, updates) = extract("<eggbot-learn>\n- match the repo style\n- fact: …\n- fact: hi\n</eggbot-learn>");
         assert_eq!(updates, vec![upd(Kind::Lesson, "match the repo style"), upd(Kind::Fact, "hi")]);
+    }
+
+    #[test]
+    fn labels_drop_the_title_and_bold_the_sections() {
+        assert_eq!(as_labels("# Notes\n\n## Facts\n- at nine\n\n## Lessons\n- terse\n"), "**Facts**\n- at nine\n\n**Lessons**\n- terse");
+        assert_eq!(as_labels("# Notes\n"), "");
     }
 
     #[test]

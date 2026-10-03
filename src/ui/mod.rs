@@ -21,9 +21,18 @@ const SIDEBAR_MAX: f32 = 420.;
 /// Room for the traffic lights. The chat top bar uses it when the sidebar is closed.
 const TRAFFIC_INSET: f32 = 84.;
 
+fn outlined(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
+    div().id(id).flex().items_center().gap_1().h(px(28.)).px_3().rounded(px(8.)).border_1().border_color(p.line).text_xs().text_color(p.ink)
+}
+
 /// A small outlined button (top bar, panels, notices).
 fn button(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
-    div().id(id).flex().items_center().gap_1().h(px(28.)).px_3().rounded(px(8.)).border_1().border_color(p.line).text_xs().text_color(p.ink).cursor_pointer().hover(|d| d.bg(p.hover))
+    outlined(id, p).cursor_pointer().hover(|d| d.bg(p.hover))
+}
+
+/// A `button` that cannot act now: dimmed, default cursor, no hover. Pick one or the other; GPUI panics if `.hover` is set twice.
+fn button_off(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
+    outlined(id, p).opacity(0.4).cursor_default()
 }
 
 /// The filled variant for the main action of a panel. GPUI panics if `.hover` is set twice, so it is not built on `button`.
@@ -108,6 +117,6 @@ impl Render for Eggbot {
                     }
                 }),
             );
-        Self::on_actions(root, cx).when(self.sidebar_open, |d| d.child(self.sidebar(cx))).child(self.chat(cx))
+        Self::on_actions(root, cx).when(self.sidebar_open, |d| d.child(self.sidebar(cx))).child(self.chat(window, cx))
     }
 }
