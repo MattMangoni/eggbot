@@ -74,9 +74,7 @@ pub fn mentions(text: &str, bots: &[(usize, &str)], sender: usize) -> Vec<usize>
     let mut found = vec![];
     for (at, _) in lower.match_indices('@') {
         let rest = &lower[at + 1..];
-        let hit = names.iter().find(|(_, n)| {
-            rest.starts_with(n.as_str()) && !rest[n.len()..].starts_with(|c: char| c.is_alphanumeric())
-        });
+        let hit = names.iter().find(|(_, n)| rest.starts_with(n.as_str()) && !rest[n.len()..].starts_with(|c: char| c.is_alphanumeric()));
         if let Some((id, _)) = hit
             && *id != sender
             && !found.contains(id)

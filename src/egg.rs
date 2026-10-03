@@ -27,33 +27,36 @@ pub fn egg(id: impl Into<SharedString>, color: Hsla, w: f32, mood: Mood) -> AnyE
 }
 
 fn paint(color: Hsla, size: f32, rot: f32, look: f32) -> impl IntoElement {
-    canvas(|_, _, _| {}, move |b, _, window, _| {
-        let (w, h) = (b.size.width.as_f32(), b.size.height.as_f32());
-        let (ox, oy) = (b.origin.x.as_f32(), b.origin.y.as_f32());
-        // unit egg coordinates (x in 0..1, y in 0..1.3), rotated around the bottom centre
-        let (sin, cos) = rot.sin_cos();
-        let at = |x: f32, y: f32| {
-            let (dx, dy) = ((x - 0.5) * w, (y - 1.3) * w);
-            point(px(ox + w / 2. + dx * cos - dy * sin), px(oy + h + dx * sin + dy * cos))
-        };
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            let (w, h) = (b.size.width.as_f32(), b.size.height.as_f32());
+            let (ox, oy) = (b.origin.x.as_f32(), b.origin.y.as_f32());
+            // unit egg coordinates (x in 0..1, y in 0..1.3), rotated around the bottom centre
+            let (sin, cos) = rot.sin_cos();
+            let at = |x: f32, y: f32| {
+                let (dx, dy) = ((x - 0.5) * w, (y - 1.3) * w);
+                point(px(ox + w / 2. + dx * cos - dy * sin), px(oy + h + dx * sin + dy * cos))
+            };
 
-        let mut shell = PathBuilder::fill();
-        shell.move_to(at(0.5, 0.));
-        shell.cubic_bezier_to(at(1., 0.82), at(0.76, 0.), at(1., 0.4));
-        shell.cubic_bezier_to(at(0.5, 1.3), at(1., 1.12), at(0.8, 1.3));
-        shell.cubic_bezier_to(at(0., 0.82), at(0.2, 1.3), at(0., 1.12));
-        shell.cubic_bezier_to(at(0.5, 0.), at(0., 0.4), at(0.24, 0.));
-        shell.close();
-        fill(window, shell, color);
+            let mut shell = PathBuilder::fill();
+            shell.move_to(at(0.5, 0.));
+            shell.cubic_bezier_to(at(1., 0.82), at(0.76, 0.), at(1., 0.4));
+            shell.cubic_bezier_to(at(0.5, 1.3), at(1., 1.12), at(0.8, 1.3));
+            shell.cubic_bezier_to(at(0., 0.82), at(0.2, 1.3), at(0., 1.12));
+            shell.cubic_bezier_to(at(0.5, 0.), at(0., 0.4), at(0.24, 0.));
+            shell.close();
+            fill(window, shell, color);
 
-        // small eggs get relatively bigger eyes so the face still reads
-        let k = (44. / size).clamp(1., 1.6);
-        for x in [0.36, 0.64] {
-            let mut eye = PathBuilder::fill();
-            ellipse(&mut eye, at(x + look * 0.04, 0.8), w * 0.05 * k, w * 0.065 * k);
-            fill(window, eye, hsla(0., 0., 0.1, 0.85));
-        }
-    })
+            // small eggs get relatively bigger eyes so the face still reads
+            let k = (44. / size).clamp(1., 1.6);
+            for x in [0.36, 0.64] {
+                let mut eye = PathBuilder::fill();
+                ellipse(&mut eye, at(x + look * 0.04, 0.8), w * 0.05 * k, w * 0.065 * k);
+                fill(window, eye, hsla(0., 0., 0.1, 0.85));
+            }
+        },
+    )
     .size_full()
 }
 

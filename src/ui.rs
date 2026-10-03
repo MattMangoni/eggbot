@@ -4,12 +4,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::popover::Popover;
+use gpui_kit::component::select::Select;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::select::Select;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -18,7 +18,10 @@ use gpui_kit::*;
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Appearance, Bot, Choice, CloseWindow, CycleAppearance, Check, Dismiss, Eggbot, Find, OpenSettings, OpenSetup, Panel, Setup, sandbox, FocusInput, MODELS, Msg, NewBot, NextBot, PRESETS, Palette, PrevBot, Quit, SHELLS, SelectBot, StopTurn, ToggleSidebar, handoff, hex, login, set_dock_icon};
+use crate::{
+    Appearance, Bot, Check, Choice, CloseWindow, CycleAppearance, Dismiss, Eggbot, Find, FocusInput, MODELS, Msg, NewBot, NextBot, OpenSettings, OpenSetup, PRESETS, Palette, Panel, PrevBot, Quit,
+    SHELLS, SelectBot, Setup, StopTurn, ToggleSidebar, handoff, hex, login, sandbox, set_dock_icon,
+};
 
 const ROW_H: f32 = 48.;
 const ROW_GAP: f32 = 2.;
@@ -32,36 +35,12 @@ const TRAFFIC_INSET: f32 = 84.;
 
 /// A small outlined button (top bar, panels, notices).
 fn button(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_1()
-        .h(px(28.))
-        .px_3()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(p.line)
-        .text_xs()
-        .text_color(p.ink)
-        .cursor_pointer()
-        .hover(|d| d.bg(p.hover))
+    div().id(id).flex().items_center().gap_1().h(px(28.)).px_3().rounded(px(8.)).border_1().border_color(p.line).text_xs().text_color(p.ink).cursor_pointer().hover(|d| d.bg(p.hover))
 }
 
 /// The filled variant for the main action of a panel. GPUI panics if `.hover` is set twice, so it is not built on `button`.
 fn primary(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .h(px(28.))
-        .px_3()
-        .rounded(px(8.))
-        .bg(p.ink)
-        .text_xs()
-        .text_color(p.bg)
-        .cursor_pointer()
-        .hover(|d| d.opacity(0.85))
+    div().id(id).flex().items_center().h(px(28.)).px_3().rounded(px(8.)).bg(p.ink).text_xs().text_color(p.bg).cursor_pointer().hover(|d| d.opacity(0.85))
 }
 
 /// A soft, layered shadow (a hairline plus a wide faint blur); none in dark mode, where borders carry depth.
@@ -69,7 +48,8 @@ fn soft_shadow(p: Palette) -> Vec<BoxShadow> {
     if p.bg.l < 0.5 {
         return vec![];
     }
-    let shadow = |alpha: f32, y: f32, blur: f32, spread: f32| BoxShadow { color: hsla(0., 0., 0., alpha), offset: point(px(0.), px(y)), blur_radius: px(blur), spread_radius: px(spread), inset: false };
+    let shadow =
+        |alpha: f32, y: f32, blur: f32, spread: f32| BoxShadow { color: hsla(0., 0., 0., alpha), offset: point(px(0.), px(y)), blur_radius: px(blur), spread_radius: px(spread), inset: false };
     vec![shadow(0.03, 1., 2., 0.), shadow(0.05, 8., 28., -6.)]
 }
 
@@ -83,28 +63,12 @@ fn short_path(path: &Path) -> String {
 
 /// A quiet text link with an icon (the row under the composer).
 fn link(id: impl Into<ElementId>, p: Palette) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .py_1()
-        .rounded(px(6.))
-        .text_xs()
-        .text_color(p.muted)
-        .cursor_pointer()
-        .hover(|d| d.bg(p.hover).text_color(p.ink))
+    div().id(id).flex().items_center().gap_1().px_2().py_1().rounded(px(6.)).text_xs().text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink))
 }
 
 fn bar(used: f32, width: f32, p: Palette, fill: Hsla) -> Div {
     let used = used.clamp(0., 1.);
-    div()
-        .w(px(width))
-        .h(px(4.))
-        .rounded_full()
-        .bg(p.tint)
-        .child(div().h_full().rounded_full().w(relative(used)).bg(fill))
+    div().w(px(width)).h(px(4.)).rounded_full().bg(p.tint).child(div().h_full().rounded_full().w(relative(used)).bg(fill))
 }
 
 /// The bordered box around a text field in the panels.
@@ -143,9 +107,8 @@ impl Eggbot {
             Provider::Codex => self.codex_models.iter().find(|m| bot.model.as_ref().map_or(m.default, |id| *id == m.id)).map(|m| m.efforts.clone()).unwrap_or_default(),
         };
         let capital = |l: &str| l[..1].to_uppercase() + &l[1..];
-        let efforts: Vec<Choice> = std::iter::once(Choice { value: None, label: "Default effort".into() })
-            .chain(levels.iter().map(|l| Choice { value: Some(l.clone()), label: capital(l).into() }))
-            .collect();
+        let efforts: Vec<Choice> =
+            std::iter::once(Choice { value: None, label: "Default effort".into() }).chain(levels.iter().map(|l| Choice { value: Some(l.clone()), label: capital(l).into() })).collect();
         let effort = bot.effort.clone();
         self.model_select.update(cx, |s, cx| {
             s.set_items(models, window, cx);
@@ -168,113 +131,105 @@ impl Eggbot {
                 d.group_hover(group.clone(), |s| s).group_drag_over::<DraggedBot>(group, |s| s.bg(hex(DROP_LINE)))
             })
         };
-        let rows = self.bots.iter().enumerate().map(|(i, b)| {
-            let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
-            let group: SharedString = format!("row-{id}").into();
-            let hold = self.breach_of(b.provider);
-            let waiting = !b.queue.is_empty() || self.schedules_wait(b);
-            let (subtitle, sub_color) = if b.busy() {
-                let text = match b.queue.len() {
-                    0 => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
-                    n => format!("Thinking… · {n} queued"),
+        let rows = self
+            .bots
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let (id, confirming) = (b.id, self.confirm_delete == Some(b.id));
+                let group: SharedString = format!("row-{id}").into();
+                let hold = self.breach_of(b.provider);
+                let waiting = !b.queue.is_empty() || self.schedules_wait(b);
+                let (subtitle, sub_color) = if b.busy() {
+                    let text = match b.queue.len() {
+                        0 => b.status.clone().unwrap_or_else(|| "Thinking…".into()),
+                        n => format!("Thinking… · {n} queued"),
+                    };
+                    (text, p.muted)
+                } else if let Some(br) = hold.as_ref().filter(|br| br.level == usage::Level::Pause || waiting) {
+                    let color = if br.level == usage::Level::Pause { p.err } else { p.warn };
+                    (usage::short(usage::provider_name(b.provider), br), color)
+                } else if !b.queue.is_empty() {
+                    (format!("{} queued", b.queue.len()), p.muted)
+                } else {
+                    (b.blurb(), p.muted)
                 };
-                (text, p.muted)
-            } else if let Some(br) = hold.as_ref().filter(|br| br.level == usage::Level::Pause || waiting) {
-                let color = if br.level == usage::Level::Pause { p.err } else { p.warn };
-                (usage::short(usage::provider_name(b.provider), br), color)
-            } else if !b.queue.is_empty() {
-                (format!("{} queued", b.queue.len()), p.muted)
-            } else {
-                (b.blurb(), p.muted)
-            };
-            let trash = div()
-                .id(("trash", id))
-                .flex()
-                .items_center()
-                .px_1()
-                .py(px(2.))
-                .rounded(px(6.))
-                .text_xs()
-                .cursor_pointer()
-                .when(confirming, |d| d.bg(p.err).text_color(hex(0xFFFFFF)).px_2().child("Delete?"))
-                .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)).child(Icon::new(IconName::Trash).size_3p5()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    if this.confirm_delete == Some(id) {
-                        this.delete(id, cx);
-                    } else {
-                        this.confirm_delete = Some(id);
-                        cx.notify();
-                    }
-                }));
-            let me = me.clone();
-            div()
-                .id(("bot", id))
-                .group(group.clone())
-                .relative()
-                .h(px(ROW_H))
-                .flex()
-                .items_center()
-                .gap_3()
-                .px_2()
-                .rounded(px(8.))
-                .cursor_pointer()
-                .when(self.open_room.is_some() || self.open_group.is_some() || i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
-                .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
-                // drag a row onto another to reorder
-                .on_drag(DraggedBot { ix: i, name: b.name.clone().into(), color: b.color(), p }, move |d, _, _, cx| {
-                    me.update(cx, |this, cx| {
-                        this.dragging = Some(d.ix);
-                        cx.notify();
+                let trash = div()
+                    .id(("trash", id))
+                    .flex()
+                    .items_center()
+                    .px_1()
+                    .py(px(2.))
+                    .rounded(px(6.))
+                    .text_xs()
+                    .cursor_pointer()
+                    .when(confirming, |d| d.bg(p.err).text_color(hex(0xFFFFFF)).px_2().child("Delete?"))
+                    .when(!confirming, |d| d.text_color(p.muted).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).hover(|d| d.text_color(p.ink)).child(Icon::new(IconName::Trash).size_3p5()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if this.confirm_delete == Some(id) {
+                            this.delete(id, cx);
+                        } else {
+                            this.confirm_delete = Some(id);
+                            cx.notify();
+                        }
+                    }));
+                let me = me.clone();
+                div()
+                    .id(("bot", id))
+                    .group(group.clone())
+                    .relative()
+                    .h(px(ROW_H))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_2()
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .when(self.open_room.is_some() || self.open_group.is_some() || i != self.selected, |d| d.hover(|d| d.bg(p.hover)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.select(i, window, cx)))
+                    // drag a row onto another to reorder
+                    .on_drag(DraggedBot { ix: i, name: b.name.clone().into(), color: b.color(), p }, move |d, _, _, cx| {
+                        me.update(cx, |this, cx| {
+                            this.dragging = Some(d.ix);
+                            cx.notify();
+                        })
+                        .ok();
+                        cx.new(|_| d.clone())
                     })
-                    .ok();
-                    cx.new(|_| d.clone())
-                })
-                .on_drop(cx.listener(move |this, d: &DraggedBot, _, cx| this.move_bot(d.ix, i, cx)))
-                .child(drop_line(group.clone(), i, self.dragging))
-                .child(egg(format!("side-{id}"), hex(b.color()), 16., b.mood()))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .overflow_hidden()
-                        .child(div().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
-                        .child(div().text_xs().text_color(sub_color).truncate().child(subtitle)),
-                )
-                .when(b.busy(), |d| d.child(Spinner::new().color(p.muted).xsmall()))
-                // unread takes the trash's slot; selecting the bot clears it
-                .when(b.unread && !b.busy(), |d| d.child(div().w(px(22.)).flex_none().flex().justify_center().child(div().size(px(7.)).rounded_full().bg(p.ink))))
-                .when(!b.unread && !b.busy(), |d| d.child(trash))
-        }).collect::<Vec<_>>();
+                    .on_drop(cx.listener(move |this, d: &DraggedBot, _, cx| this.move_bot(d.ix, i, cx)))
+                    .child(drop_line(group.clone(), i, self.dragging))
+                    .child(egg(format!("side-{id}"), hex(b.color()), 16., b.mood()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .overflow_hidden()
+                            .child(div().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
+                            .child(div().text_xs().text_color(sub_color).truncate().child(subtitle)),
+                    )
+                    .when(b.busy(), |d| d.child(Spinner::new().color(p.muted).xsmall()))
+                    // unread takes the trash's slot; selecting the bot clears it
+                    .when(b.unread && !b.busy(), |d| d.child(div().w(px(22.)).flex_none().flex().justify_center().child(div().size(px(7.)).rounded_full().bg(p.ink))))
+                    .when(!b.unread && !b.busy(), |d| d.child(trash))
+            })
+            .collect::<Vec<_>>();
 
         // one highlight that springs to the selected row
-        let highlight = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .h(px(ROW_H))
-            .rounded(px(8.))
-            .bg(p.tint)
-            .with_spring("selection", SpringAnimation::new(SpringConfig::new(320., 28., 1.)).to(px(self.selected as f32 * (ROW_H + ROW_GAP))).with_epsilon(0.25), |d, top| d.top(top));
+        let highlight = div().absolute().left_0().right_0().h(px(ROW_H)).rounded(px(8.)).bg(p.tint).with_spring(
+            "selection",
+            SpringAnimation::new(SpringConfig::new(320., 28., 1.)).to(px(self.selected as f32 * (ROW_H + ROW_GAP))).with_epsilon(0.25),
+            |d, top| d.top(top),
+        );
 
-        let handle = div()
-            .id("resize")
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .right(px(-3.))
-            .w(px(6.))
-            .cursor_col_resize()
-            .when(self.resizing, |d| d.bg(p.line))
-            .hover(|d| d.bg(p.line))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.resizing = true;
-                    cx.notify();
-                }),
-            );
+        let handle = div().id("resize").absolute().top_0().bottom_0().right(px(-3.)).w(px(6.)).cursor_col_resize().when(self.resizing, |d| d.bg(p.line)).hover(|d| d.bg(p.line)).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.resizing = true;
+                cx.notify();
+            }),
+        );
 
         div()
             .relative()
@@ -325,7 +280,9 @@ impl Eggbot {
                     .flex_col()
                     .px_2()
                     .pt_1()
-                    .child(div().relative().flex().flex_col().gap(px(ROW_GAP)).when(self.open_room.is_none() && self.open_group.is_none() && !self.bots.is_empty(), |d| d.child(highlight)).children(rows))
+                    .child(
+                        div().relative().flex().flex_col().gap(px(ROW_GAP)).when(self.open_room.is_none() && self.open_group.is_none() && !self.bots.is_empty(), |d| d.child(highlight)).children(rows),
+                    )
                     // the space below the last bot: drop here to move a bot to the end
                     .child(
                         div()
@@ -340,7 +297,9 @@ impl Eggbot {
             )
             .child(self.rooms_nav(cx))
             .child(self.groups_nav(cx))
-            .when(!self.meters.is_empty(), |d| d.child(div().flex_none().flex().flex_col().gap_3().px_4().py_3().border_t_1().border_color(p.line).children(self.meters.iter().map(|m| self.usage_meter(m)))))
+            .when(!self.meters.is_empty(), |d| {
+                d.child(div().flex_none().flex().flex_col().gap_3().px_4().py_3().border_t_1().border_color(p.line).children(self.meters.iter().map(|m| self.usage_meter(m))))
+            })
             .child(handle)
     }
 
@@ -374,15 +333,17 @@ impl Eggbot {
     /// A section title with its + button; the button lines up with the one in the sidebar header.
     fn nav_header(&self, title: &'static str, plus: Stateful<Div>) -> Div {
         let p = self.p;
-        div()
-            .h(px(32.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pl_4()
-            .pr_2()
-            .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.muted).child(title))
-            .child(plus.size(px(28.)).flex().items_center().justify_center().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(IconName::Plus).size_4()))
+        div().h(px(32.)).flex_none().flex().items_center().pl_4().pr_2().child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.muted).child(title)).child(
+            plus.size(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .text_color(p.muted)
+                .cursor_pointer()
+                .hover(|d| d.bg(p.hover).text_color(p.ink))
+                .child(Icon::new(IconName::Plus).size_4()),
+        )
     }
 
     /// Rooms sit under the bot list: a title, who is in, and a dot when a member has news.
@@ -455,7 +416,13 @@ impl Eggbot {
             .child(div().flex().items_center().child(div().flex_1().font_weight(FontWeight::MEDIUM).child(name)).child(div().opacity(0.8).child(format!("updated {at}"))))
             .children(meter.windows.iter().map(|w| {
                 let v = usage::window_used(w, now);
-                let fill = if v >= self.pause { p.err } else if v >= usage::AMBER { p.warn } else { p.muted };
+                let fill = if v >= self.pause {
+                    p.err
+                } else if v >= usage::AMBER {
+                    p.warn
+                } else {
+                    p.muted
+                };
                 div()
                     .flex()
                     .items_center()
@@ -506,7 +473,9 @@ impl Eggbot {
                         cx.notify();
                     }))
                     .child(egg(format!("preset-{i}"), hex(preset.color), 14., Mood::Still))
-                    .child(div().flex().flex_col().overflow_hidden().child(div().text_sm().text_color(p.ink).child(preset.name)).child(div().text_xs().text_color(p.muted).truncate().child(preset.blurb)))
+                    .child(
+                        div().flex().flex_col().overflow_hidden().child(div().text_sm().text_color(p.ink).child(preset.name)).child(div().text_xs().text_color(p.muted).truncate().child(preset.blurb)),
+                    )
             }))
             .with_animation("menu-in", Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
     }
@@ -543,7 +512,15 @@ impl Eggbot {
                         .rounded(px(6.))
                         .hover(|d| d.bg(p.hover))
                         .child(Icon::new(IconName::Folder).size_3p5().text_color(p.muted))
-                        .child(div().flex().flex_col().flex_1().min_w_0().child(div().text_sm().text_color(p.ink).truncate().child(f.name.clone())).child(div().text_xs().text_color(p.muted).truncate().child(parent)))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().text_color(p.ink).truncate().child(f.name.clone()))
+                                .child(div().text_xs().text_color(p.muted).truncate().child(parent)),
+                        )
                         .child(
                             div()
                                 .id(("unmount", i))
@@ -561,32 +538,26 @@ impl Eggbot {
                         )
                 });
                 let me = me.clone();
-                div()
-                    .w(px(300.))
-                    .flex()
-                    .flex_col()
-                    .children(rows)
-                    .child(div().h(px(1.)).my_1().bg(p.line))
-                    .child(
-                        div()
-                            .id("folder-add")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .text_sm()
-                            .text_color(p.ink)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(p.hover))
-                            .on_click(cx.listener(move |state, _, window, cx| {
-                                state.dismiss(window, cx);
-                                me.update(cx, |this, cx| this.pick_folder(cx)).ok();
-                            }))
-                            .child(Icon::new(IconName::Plus).size_3p5().text_color(p.muted))
-                            .child("Add folder…"),
-                    )
+                div().w(px(300.)).flex().flex_col().children(rows).child(div().h(px(1.)).my_1().bg(p.line)).child(
+                    div()
+                        .id("folder-add")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.))
+                        .text_sm()
+                        .text_color(p.ink)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(p.hover))
+                        .on_click(cx.listener(move |state, _, window, cx| {
+                            state.dismiss(window, cx);
+                            me.update(cx, |this, cx| this.pick_folder(cx)).ok();
+                        }))
+                        .child(Icon::new(IconName::Plus).size_3p5().text_color(p.muted))
+                        .child("Add folder…"),
+                )
             })
             .into_any_element()
     }
@@ -703,14 +674,7 @@ impl Eggbot {
         } else {
             // a virtual list: only the messages on screen (plus some overdraw) are drawn
             let msgs = list(self.list.clone(), cx.processor(|this: &mut Self, ix: usize, _, cx| this.row(ix, cx))).flex_1();
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .child(msgs)
-                .child(div().px_6().pb_4().child(div().max_w(px(READ_W)).mx_auto().w_full().child(self.composer(bot, cx))))
-                .into_any_element()
+            div().flex_1().min_h_0().flex().flex_col().child(msgs).child(div().px_6().pb_4().child(div().max_w(px(READ_W)).mx_auto().w_full().child(self.composer(bot, cx)))).into_any_element()
         };
 
         // new id per bot, so switching bots replays the fade
@@ -762,22 +726,31 @@ impl Eggbot {
         });
 
         // dropdowns hug their label, like the references
-        let model_label = self.model_select.read(cx).selected_value().cloned().flatten().and_then(|v| {
-            let (provider, model) = v.split_once(':').unwrap_or((v.as_str(), ""));
-            let name = MODELS.iter().find(|(a, _)| *a == Some(model)).map(|(_, l)| l.to_string()).or_else(|| self.codex_models.iter().find(|m| m.id == model).map(|m| m.name.clone()));
-            Some(match (provider, name) {
-                ("codex", Some(n)) => format!("Codex · {n}"),
-                ("codex", None) => "Codex".into(),
-                (_, Some(n)) => format!("Claude · {n}"),
-                _ => "Claude".into(),
+        let model_label = self
+            .model_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .flatten()
+            .and_then(|v| {
+                let (provider, model) = v.split_once(':').unwrap_or((v.as_str(), ""));
+                let name = MODELS.iter().find(|(a, _)| *a == Some(model)).map(|(_, l)| l.to_string()).or_else(|| self.codex_models.iter().find(|m| m.id == model).map(|m| m.name.clone()));
+                Some(match (provider, name) {
+                    ("codex", Some(n)) => format!("Codex · {n}"),
+                    ("codex", None) => "Codex".into(),
+                    (_, Some(n)) => format!("Claude · {n}"),
+                    _ => "Claude".into(),
+                })
             })
-        }).unwrap_or_else(|| "Claude".into());
+            .unwrap_or_else(|| "Claude".into());
         let effort_label = bot.effort.clone().unwrap_or_else(|| "Default effort".into());
         let fit = |label: &str| (label.chars().count() as f32 * 6.2 + 28.).clamp(48., 260.);
         let codex_note = (bot.provider == Provider::Codex && self.codex_models.is_empty()).then(|| self.codex_query.clone()).flatten();
         let note = codex_note.map(|failed| match failed {
             None => div().text_xs().text_color(p.muted).child("Loading Codex models…").into_any_element(),
-            Some(e) if e.contains("codex login") => link("codex-sign-in", p).child("Codex is not signed in · Sign in").on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))).into_any_element(),
+            Some(e) if e.contains("codex login") => {
+                link("codex-sign-in", p).child("Codex is not signed in · Sign in").on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))).into_any_element()
+            }
             Some(e) => link("codex-retry", p).child(format!("Codex: {e} · Retry")).on_click(cx.listener(|this, _, _, cx| this.refresh_codex(1, cx))).into_any_element(),
         });
 
@@ -878,7 +851,8 @@ impl Eggbot {
     /// The search field in the top bar (⌘F), or the icon that opens it.
     fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
-        let icon_button = |id: &'static str, icon: IconName| div().id(id).p_1().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(icon).size_3p5());
+        let icon_button =
+            |id: &'static str, icon: IconName| div().id(id).p_1().rounded(px(6.)).text_color(p.muted).cursor_pointer().hover(|d| d.bg(p.hover).text_color(p.ink)).child(Icon::new(icon).size_3p5());
         if !self.find_open {
             return icon_button("find", IconName::Search).on_click(cx.listener(|this, _, window, cx| this.open_find(window, cx))).into_any_element();
         }
@@ -926,7 +900,15 @@ impl Eggbot {
                 .gap_3()
                 .py_2()
                 .child(div().w(px(18.)).flex_none().flex().justify_center().child(icon))
-                .child(div().flex().flex_col().flex_1().min_w_0().child(div().text_sm().text_color(p.ink).child(title)).child(div().text_xs().text_color(if failed { p.err } else { p.muted }).child(line)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_sm().text_color(p.ink).child(title))
+                        .child(div().text_xs().text_color(if failed { p.err } else { p.muted }).child(line)),
+                )
                 .when_some(action.filter(|_| !matches!(check, Check::Ok | Check::Unknown)), |d, (label, act)| {
                     d.child(button(key, p).flex_none().on_click(cx.listener(move |this, _, _, cx| act(this, cx))).child(if matches!(check, Check::Busy(_)) { "Again" } else { label }))
                 })
@@ -943,9 +925,32 @@ impl Eggbot {
         let rows = div()
             .flex()
             .flex_col()
-            .child(row("setup-engine", "Docker engine", &s.engine, "Docker is installed.", "Each bot runs in its own container. Colima is free and open source.", Some(("Install Colima", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.engine, "Installing in Terminal…", sandbox::install_engine, cx))))))
-            .child(row("setup-running", "Docker running", &s.running, "Docker is running.", "Start your Docker engine.", ready(&s.engine).then(|| ("Start Docker", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.running, "Starting Docker…", sandbox::wake, cx)) as Act))))
-            .child(row("setup-image", "Bot machine", &s.image, "The bot machine is ready.", "The image every bot runs in. Built once, in about a minute.", ready(&s.running).then(|| ("Build", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.image, "Building, about a minute…", || sandbox::ready(&|_| {}), cx)) as Act))))
+            .child(row(
+                "setup-engine",
+                "Docker engine",
+                &s.engine,
+                "Docker is installed.",
+                "Each bot runs in its own container. Colima is free and open source.",
+                Some(("Install Colima", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.engine, "Installing in Terminal…", sandbox::install_engine, cx)))),
+            ))
+            .child(row(
+                "setup-running",
+                "Docker running",
+                &s.running,
+                "Docker is running.",
+                "Start your Docker engine.",
+                ready(&s.engine).then(|| ("Start Docker", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.running, "Starting Docker…", sandbox::wake, cx)) as Act)),
+            ))
+            .child(row(
+                "setup-image",
+                "Bot machine",
+                &s.image,
+                "The bot machine is ready.",
+                "The image every bot runs in. Built once, in about a minute.",
+                ready(&s.running).then(|| {
+                    ("Build", Box::new(|this: &mut Eggbot, cx: &mut Context<Eggbot>| this.setup_action(|s| &mut s.image, "Building, about a minute…", || sandbox::ready(&|_| {}), cx)) as Act)
+                }),
+            ))
             .child(div().h(px(1.)).my_1().bg(p.line))
             .child(row("setup-claude", "Claude", &s.claude, "Signed in to Claude.", "Sign in with your Claude plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(false)))))
             .child(row("setup-codex", "Codex", &s.codex, "Signed in to Codex.", "Sign in with your ChatGPT plan, in Terminal.", ready(&s.image).then(|| ("Sign in", sign_in(true)))));
@@ -1047,7 +1052,15 @@ impl Eggbot {
         div().px_6().child(
             self.panel()
                 .child(div().flex().flex_col().gap_1().child(label("Name")).child(field(p).child(Input::new(&self.edit_name).appearance(false))))
-                .child(div().flex().flex_col().gap_1().child(label("Role")).child(field(p).child(Textarea::new(&self.edit_role).appearance(false))).child(div().text_xs().text_color(p.muted).child("Skills sit under the composer and go out with this role.")))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(label("Role"))
+                        .child(field(p).child(Textarea::new(&self.edit_role).appearance(false)))
+                        .child(div().text_xs().text_color(p.muted).child("Skills sit under the composer and go out with this role.")),
+                )
                 .child(
                     div()
                         .flex()
@@ -1057,10 +1070,12 @@ impl Eggbot {
                         .children(swatches)
                         .child(div().flex_1())
                         .child(
-                            button("cancel-edit", p).on_click(cx.listener(|this, _, _, cx| {
-                                this.panel = Panel::None;
-                                cx.notify();
-                            })).child("Cancel"),
+                            button("cancel-edit", p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.panel = Panel::None;
+                                    cx.notify();
+                                }))
+                                .child("Cancel"),
                         )
                         .child(primary("save-edit", p).on_click(cx.listener(|this, _, window, cx| this.save_edit(window, cx))).child("Save")),
                 )
@@ -1142,92 +1157,97 @@ impl Eggbot {
     fn room_setup(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let Some(room_id) = self.open_room else { return div().into_any_element() };
-        let Some((title, kickoff, members, facilitator, started)) = self.rooms.iter().find(|r| r.id == room_id).map(|r| (r.title.clone(), r.kickoff.clone(), r.members.clone(), r.facilitator, r.started)) else {
+        let Some((title, kickoff, members, facilitator, started)) =
+            self.rooms.iter().find(|r| r.id == room_id).map(|r| (r.title.clone(), r.kickoff.clone(), r.members.clone(), r.facilitator, r.started))
+        else {
             return div().into_any_element();
         };
         let why = crate::room::block(&title, &kickoff, &members, facilitator);
         let label = |t: &'static str| div().text_xs().text_color(p.muted).child(t);
         let field = || div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line);
-        let roster: Vec<_> = self.bots.iter().map(|b| {
-            let (bot_id, on, fac) = (b.id, members.contains(&b.id), facilitator == Some(b.id));
-            let (unread, busy) = (b.unread, b.busy());
-            div()
-                .id(("member", bot_id))
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_1()
-                .py_1()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|d| d.bg(p.hover))
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_member(room_id, bot_id, cx)))
-                .child(div().size(px(16.)).flex_none().rounded(px(4.)).border_1().border_color(if on { p.ink } else { p.line }).when(on, |d| d.bg(p.ink)))
-                .child(egg(format!("room-{bot_id}"), hex(b.color()), 14., b.mood()))
-                .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
-                .when(busy, |d| d.child(Spinner::new().color(p.muted).xsmall()))
-                .when(on && fac, |d| d.child(div().text_xs().text_color(p.muted).child("Facilitator")))
-                .when(on && !fac, |d| {
-                    d.child(
+        let roster: Vec<_> = self
+            .bots
+            .iter()
+            .map(|b| {
+                let (bot_id, on, fac) = (b.id, members.contains(&b.id), facilitator == Some(b.id));
+                let (unread, busy) = (b.unread, b.busy());
+                div()
+                    .id(("member", bot_id))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_1()
+                    .py_1()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_member(room_id, bot_id, cx)))
+                    .child(div().size(px(16.)).flex_none().rounded(px(4.)).border_1().border_color(if on { p.ink } else { p.line }).when(on, |d| d.bg(p.ink)))
+                    .child(egg(format!("room-{bot_id}"), hex(b.color()), 14., b.mood()))
+                    .child(div().flex_1().min_w_0().text_sm().text_color(p.ink).truncate().child(b.name.clone()))
+                    .when(busy, |d| d.child(Spinner::new().color(p.muted).xsmall()))
+                    .when(on && fac, |d| d.child(div().text_xs().text_color(p.muted).child("Facilitator")))
+                    .when(on && !fac, |d| {
+                        d.child(
+                            div()
+                                .id(("fac", bot_id))
+                                .text_xs()
+                                .text_color(p.muted)
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(p.ink))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_facilitator(room_id, bot_id, cx);
+                                }))
+                                .child("Make facilitator"),
+                        )
+                    })
+                    .child(
                         div()
-                            .id(("fac", bot_id))
+                            .id(("open-bot", bot_id))
                             .text_xs()
                             .text_color(p.muted)
                             .cursor_pointer()
                             .hover(|s| s.text_color(p.ink))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.set_facilitator(room_id, bot_id, cx);
+                                this.open_bot(bot_id, window, cx);
                             }))
-                            .child("Make facilitator"),
+                            .child(if unread { "Open · new" } else { "Open" }),
                     )
-                })
-                .child(
-                    div()
-                        .id(("open-bot", bot_id))
-                        .text_xs()
-                        .text_color(p.muted)
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(p.ink))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.open_bot(bot_id, window, cx);
-                        }))
-                        .child(if unread { "Open · new" } else { "Open" }),
-                )
-        }).collect();
+            })
+            .collect();
         let confirming = self.confirm_delete_room == Some(room_id);
-        div().px_6().pb_8().child(
-            self.panel()
-                .child(div().flex().flex_col().gap_1().child(label("Title")).child(field().child(Input::new(&self.room_title).appearance(false))))
-                .child(div().flex().flex_col().gap_1().child(label("Kickoff")).child(field().child(Textarea::new(&self.room_kickoff).appearance(false))))
-                .child(div().text_xs().text_color(p.muted).child("Start sends this to the facilitator only. Their reply, and any @Name that stays in this room, shows here. There is no lead."))
-                .child(div().h(px(1.)).bg(p.line))
-                .child(label("Bots"))
-                .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
-                .child(div().flex().flex_col().gap_1().children(roster))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .pt_1()
-                        .child(div().flex_1())
-                        .when_some(self.room_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
-                        .when(self.room_error.is_none(), |d| d.when_some(self.room_status.clone(), |d, s| d.child(div().flex_1().text_xs().text_color(p.muted).child(s))))
-                        .child(
-                            button("delete-room", p)
-                                .on_click(cx.listener(move |this, _, _, cx| this.delete_room(room_id, cx)))
-                                .child(if confirming { "Delete room?" } else { "Delete" }),
-                        )
-                        .child(
-                            primary("start-room", p)
-                                .when(why.is_some(), |d| d.opacity(0.4))
-                                .on_click(cx.listener(move |this, _, _, cx| this.start_room(cx)))
-                                .child(if started { "Start again" } else { "Start" }),
-                        ),
-                ),
-        ).into_any_element()
+        div()
+            .px_6()
+            .pb_8()
+            .child(
+                self.panel()
+                    .child(div().flex().flex_col().gap_1().child(label("Title")).child(field().child(Input::new(&self.room_title).appearance(false))))
+                    .child(div().flex().flex_col().gap_1().child(label("Kickoff")).child(field().child(Textarea::new(&self.room_kickoff).appearance(false))))
+                    .child(div().text_xs().text_color(p.muted).child("Start sends this to the facilitator only. Their reply, and any @Name that stays in this room, shows here. There is no lead."))
+                    .child(div().h(px(1.)).bg(p.line))
+                    .child(label("Bots"))
+                    .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
+                    .child(div().flex().flex_col().gap_1().children(roster))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .pt_1()
+                            .child(div().flex_1())
+                            .when_some(self.room_error.clone(), |d, e| d.child(div().text_xs().text_color(p.err).child(e)))
+                            .when(self.room_error.is_none(), |d| d.when_some(self.room_status.clone(), |d, s| d.child(div().flex_1().text_xs().text_color(p.muted).child(s))))
+                            .child(button("delete-room", p).on_click(cx.listener(move |this, _, _, cx| this.delete_room(room_id, cx))).child(if confirming { "Delete room?" } else { "Delete" }))
+                            .child(primary("start-room", p).when(why.is_some(), |d| d.opacity(0.4)).on_click(cx.listener(move |this, _, _, cx| this.start_room(cx))).child(if started {
+                                "Start again"
+                            } else {
+                                "Start"
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// One row of the room transcript, or a member still writing this room's turn.
@@ -1294,23 +1314,22 @@ impl Eggbot {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(p.muted)
-                            .child(egg(format!("room-egg-{room_id}-{ix}"), hex(*color), 14., Mood::Still))
-                            .child(
-                                div()
-                                    .id(("room-who", ix))
-                                    .cursor_pointer()
-                                    .hover(|d| d.text_color(p.ink))
-                                    .on_click(cx.listener(move |this, _, window, cx| this.open_bot(bot_id, window, cx)))
-                                    .child(name.clone()),
-                            ),
+                        div().flex().items_center().gap_2().text_xs().text_color(p.muted).child(egg(format!("room-egg-{room_id}-{ix}"), hex(*color), 14., Mood::Still)).child(
+                            div()
+                                .id(("room-who", ix))
+                                .cursor_pointer()
+                                .hover(|d| d.text_color(p.ink))
+                                .on_click(cx.listener(move |this, _, window, cx| this.open_bot(bot_id, window, cx)))
+                                .child(name.clone()),
+                        ),
                     )
-                    .child(div().text_size(px(15.)).line_height(relative(1.6)).text_color(p.ink).child(TextView::markdown(("room-md", room_id.saturating_mul(100_000).saturating_add(ix)), text.clone()).selectable(true)))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .line_height(relative(1.6))
+                            .text_color(p.ink)
+                            .child(TextView::markdown(("room-md", room_id.saturating_mul(100_000).saturating_add(ix)), text.clone()).selectable(true)),
+                    )
             }
             crate::room::Event::Handoff { from_name, to, to_name, paused, .. } => {
                 let (to, paused) = (*to, *paused);
@@ -1331,9 +1350,8 @@ impl Eggbot {
                             .child(to_name.clone()),
                     )
                     .when(paused, |d| {
-                        d.child(format!("Paused after {} handoffs", handoff::MAX_HOPS)).child(
-                            button(("room-cont", ix), p).on_click(cx.listener(move |this, _, _, cx| this.continue_room(room_id, to, cx))).child("Continue chain"),
-                        )
+                        d.child(format!("Paused after {} handoffs", handoff::MAX_HOPS))
+                            .child(button(("room-cont", ix), p).on_click(cx.listener(move |this, _, _, cx| this.continue_room(room_id, to, cx))).child("Continue chain"))
                     })
             }
             crate::room::Event::Trouble { name, text, .. } => div().text_sm().text_color(p.err).child(format!("{name} · {text}")),
@@ -1426,86 +1444,98 @@ impl Eggbot {
                 .border_color(if on { p.ink } else { p.muted.opacity(0.6) })
                 .when(on, |d| d.bg(p.ink).child(Icon::new(IconName::Check).size_3().text_color(p.bg)))
         };
-        let roster: Vec<_> = self.bots.iter().map(|b| {
-            let (bot_id, on) = (b.id, members.contains(&b.id));
-            div()
-                .id(("group-member", bot_id))
-                .flex()
-                .items_center()
-                .gap_2p5()
-                .px_2()
-                .py_1p5()
-                .rounded(px(8.))
-                .cursor_pointer()
-                .hover(|d| d.bg(p.hover))
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_group_member(group_id, bot_id, cx)))
-                .child(check(on))
-                .child(egg(format!("group-{bot_id}"), hex(b.color()), 16., b.mood()))
-                .child(div().flex_1().min_w_0().text_sm().text_color(if on { p.ink } else { p.muted }).truncate().child(b.name.clone()))
-                .child(
-                    div()
-                        .id(("group-open", bot_id))
-                        .px_1p5()
-                        .rounded(px(6.))
-                        .text_xs()
-                        .text_color(p.muted)
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(p.ink))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.open_bot(bot_id, window, cx);
-                        }))
-                        .child("Open chat"),
-                )
-        }).collect();
+        let roster: Vec<_> = self
+            .bots
+            .iter()
+            .map(|b| {
+                let (bot_id, on) = (b.id, members.contains(&b.id));
+                div()
+                    .id(("group-member", bot_id))
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_group_member(group_id, bot_id, cx)))
+                    .child(check(on))
+                    .child(egg(format!("group-{bot_id}"), hex(b.color()), 16., b.mood()))
+                    .child(div().flex_1().min_w_0().text_sm().text_color(if on { p.ink } else { p.muted }).truncate().child(b.name.clone()))
+                    .child(
+                        div()
+                            .id(("group-open", bot_id))
+                            .px_1p5()
+                            .rounded(px(6.))
+                            .text_xs()
+                            .text_color(p.muted)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(p.ink))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.open_bot(bot_id, window, cx);
+                            }))
+                            .child("Open chat"),
+                    )
+            })
+            .collect();
         let count = members.iter().filter(|id| self.bots.iter().any(|b| b.id == **id)).count();
         let confirming = self.confirm_delete_group == Some(group_id);
-        div().px_6().pb_8().child(
-            self.panel()
-                .gap_4()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.group_title).appearance(false)))
-                        .child(div().text_sm().text_color(p.muted).child("Every bot in this group reads the same shared notes on each turn. A member adds to them with a group bullet at the end of a reply:"))
-                        .child(div().px_3().py_2().rounded(px(8.)).bg(p.bubble).text_xs().font_family("Menlo").text_color(p.ink).child("- group fact: we deploy on Fridays"))
-                        .child(div().text_sm().text_color(p.muted).child("Tell one member \"remember for the group: we deploy on Fridays\" and the others know it next turn. Private notes and skills stay on each bot.")),
-                )
-                .child(divider())
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().flex().items_baseline().gap_2().child(heading("Members")).child(div().text_xs().text_color(p.muted).child(if count == 1 { "1 bot".to_string() } else { format!("{count} bots") })))
-                        .child(hint("Tick a bot to let it read and add to the shared notes.")),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here.")))
-                        .children(roster),
-                )
-                .child(divider())
-                .child(self.group_notes(group_id))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().flex_1())
-                        .child(
+        div()
+            .px_6()
+            .pb_8()
+            .child(
+                self.panel()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().px_3().py_1().rounded(px(8.)).border_1().border_color(p.line).child(Input::new(&self.group_title).appearance(false)))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child("Every bot in this group reads the same shared notes on each turn. A member adds to them with a group bullet at the end of a reply:"),
+                            )
+                            .child(div().px_3().py_2().rounded(px(8.)).bg(p.bubble).text_xs().font_family("Menlo").text_color(p.ink).child("- group fact: we deploy on Fridays"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child("Tell one member \"remember for the group: we deploy on Fridays\" and the others know it next turn. Private notes and skills stay on each bot."),
+                            ),
+                    )
+                    .child(divider())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().flex().items_baseline().gap_2().child(heading("Members")).child(div().text_xs().text_color(p.muted).child(if count == 1 {
+                                "1 bot".to_string()
+                            } else {
+                                format!("{count} bots")
+                            })))
+                            .child(hint("Tick a bot to let it read and add to the shared notes.")),
+                    )
+                    .child(
+                        div().flex().flex_col().gap_0p5().when(self.bots.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("Hatch a bot first, then add it here."))).children(roster),
+                    )
+                    .child(divider())
+                    .child(self.group_notes(group_id))
+                    .child(
+                        div().flex().items_center().gap_2().child(div().flex_1()).child(
                             button("delete-group", p)
                                 .on_click(cx.listener(move |this, _, _, cx| this.delete_group(group_id, cx)))
                                 .when(confirming, |d| d.border_color(p.err).text_color(p.err))
                                 .child(if confirming { "Delete group and notes?" } else { "Delete group" }),
                         ),
-                ),
-        ).into_any_element()
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Shared notes, read-only, like room memory. Only member bots write them.
@@ -1533,22 +1563,11 @@ impl Eggbot {
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("Shared notes"))
                     .child(div().text_xs().text_color(p.muted).child("Read-only. Member bots write these; you cannot edit them here.")),
             )
-            .child(
-                div()
-                    .id("group-notes")
-                    .max_h(px(320.))
-                    .overflow_y_scroll()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(p.line)
-                    .child(if notes.is_empty() {
-                        div().text_sm().text_color(p.muted).child("No shared notes yet.").into_any_element()
-                    } else {
-                        div().text_sm().text_color(p.ink).child(TextView::markdown(("group-notes", group_id), notes).selectable(true)).into_any_element()
-                    }),
-            )
+            .child(div().id("group-notes").max_h(px(320.)).overflow_y_scroll().px_3().py_2().rounded(px(8.)).border_1().border_color(p.line).child(if notes.is_empty() {
+                div().text_sm().text_color(p.muted).child("No shared notes yet.").into_any_element()
+            } else {
+                div().text_sm().text_color(p.ink).child(TextView::markdown(("group-notes", group_id), notes).selectable(true)).into_any_element()
+            }))
             .into_any_element()
     }
 
@@ -1559,7 +1578,9 @@ impl Eggbot {
         let login = login::state();
         let note = match (&self.login_error, &login) {
             (Some(e), _) => Some(div().text_xs().text_color(p.err).child(e.clone()).into_any_element()),
-            (None, login::State::NeedsApproval) => Some(link("login-approve", p).child("Allow eggbot in System Settings → Login Items").on_click(|_, _, _| login::open_system_settings()).into_any_element()),
+            (None, login::State::NeedsApproval) => {
+                Some(link("login-approve", p).child("Allow eggbot in System Settings → Login Items").on_click(|_, _, _| login::open_system_settings()).into_any_element())
+            }
             _ => None,
         };
         let on = !matches!(login, login::State::Off);
@@ -1571,7 +1592,14 @@ impl Eggbot {
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(div().flex().flex_col().flex_1().child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("Start at login")).child(label("Only the menu bar egg appears, and schedules keep running.")))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child("Start at login"))
+                                .child(label("Only the menu bar egg appears, and schedules keep running.")),
+                        )
                         .child(Switch::new("login").checked(on).on_click(cx.listener(|this, on: &bool, _, cx| this.set_login(*on, cx)))),
                 )
                 .children(note)
@@ -1615,10 +1643,12 @@ impl Eggbot {
                         .gap_2()
                         .child(div().flex_1())
                         .child(
-                            button("cancel-settings", p).on_click(cx.listener(|this, _, _, cx| {
-                                this.panel = Panel::None;
-                                cx.notify();
-                            })).child("Cancel"),
+                            button("cancel-settings", p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.panel = Panel::None;
+                                    cx.notify();
+                                }))
+                                .child("Cancel"),
                         )
                         .child(primary("save-settings", p).on_click(cx.listener(|this, _, window, cx| this.save_settings(window, cx))).child("Save")),
                 ),
@@ -1688,10 +1718,16 @@ impl Eggbot {
                         .gap_2()
                         .when_some(self.skill_error.clone(), |d, e| d.child(div().flex_1().min_w_0().text_xs().text_color(p.err).child(e)))
                         .when(self.skill_error.is_none(), |d| d.child(div().flex_1()))
-                        .when(saving, |d| d.child(button("clear-skill", p).on_click(cx.listener(|this, _, window, cx| {
-                            this.clear_skill_form(window, cx);
-                            cx.notify();
-                        })).child("Cancel")))
+                        .when(saving, |d| {
+                            d.child(
+                                button("clear-skill", p)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.clear_skill_form(window, cx);
+                                        cx.notify();
+                                    }))
+                                    .child("Cancel"),
+                            )
+                        })
                         .child(primary("save-skill", p).on_click(cx.listener(|this, _, window, cx| this.save_skill(window, cx))).child(if saving { "Save" } else { "Add" })),
                 ),
         )
@@ -1776,14 +1812,11 @@ impl Eggbot {
     /// Shown while the bot works without writing: a wobbling egg and a pulsing label.
     fn typing(&self, bot: &Bot) -> impl IntoElement {
         let label = bot.status.clone().unwrap_or_else(|| "Thinking…".into());
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_sm()
-            .text_color(self.p.muted)
-            .child(egg(format!("typing-{}", bot.id), hex(bot.color()), 14., Mood::Thinking))
-            .child(div().child(label).with_animation("pulse", Animation::new(Duration::from_millis(1600)).repeat(), |d, t| d.opacity(0.45 + 0.55 * (t * std::f32::consts::TAU).cos().abs())))
+        div().flex().items_center().gap_2().text_sm().text_color(self.p.muted).child(egg(format!("typing-{}", bot.id), hex(bot.color()), 14., Mood::Thinking)).child(div().child(label).with_animation(
+            "pulse",
+            Animation::new(Duration::from_millis(1600)).repeat(),
+            |d, t| d.opacity(0.45 + 0.55 * (t * std::f32::consts::TAU).cos().abs()),
+        ))
     }
 
     /// A message waiting on the bot's queue (busy or throttled); × drops it. It becomes a normal bubble when its turn starts.
@@ -1800,27 +1833,33 @@ impl Eggbot {
             .hover(|d| d.bg(p.hover).text_color(p.ink))
             .on_click(cx.listener(move |this, _, _, cx| this.unqueue(id, at, cx)))
             .child(Icon::new(IconName::Close).size_3());
-        div().flex().justify_end().child(
-            div()
-                .max_w(relative(0.75))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .px_4()
-                .py_2()
-                .rounded(px(18.))
-                .border_1()
-                .border_color(p.line)
-                .child(div().flex().items_center().gap_2().child(div().flex_1().text_xs().text_color(p.muted).child(note)).child(remove))
-                .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.muted).child(text.to_string())),
-        )
-        .into_any_element()
+        div()
+            .flex()
+            .justify_end()
+            .child(
+                div()
+                    .max_w(relative(0.75))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_4()
+                    .py_2()
+                    .rounded(px(18.))
+                    .border_1()
+                    .border_color(p.line)
+                    .child(div().flex().items_center().gap_2().child(div().flex_1().text_xs().text_color(p.muted).child(note)).child(remove))
+                    .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.muted).child(text.to_string())),
+            )
+            .into_any_element()
     }
 
     fn message(&self, bot: &Bot, i: usize, m: &Msg, cx: &mut Context<Self>) -> AnyElement {
         let p = self.p;
         let el = match m {
-            Msg::User(t) => div().flex().justify_end().child(div().max_w(relative(0.75)).px_4().py_2().rounded(px(18.)).bg(p.bubble).text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(t.clone())),
+            Msg::User(t) => div()
+                .flex()
+                .justify_end()
+                .child(div().max_w(relative(0.75)).px_4().py_2().rounded(px(18.)).bg(p.bubble).text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(t.clone())),
             Msg::Kickoff { room_id, room, text, .. } => {
                 let room_id = *room_id;
                 let title = room.clone();
@@ -1916,7 +1955,16 @@ impl Eggbot {
                     .py_2()
                     .rounded(px(18.))
                     .bg(p.bubble)
-                    .child(div().flex().items_center().gap_1().text_xs().text_color(p.muted).child(Icon::new(if label == "Fresh start" { IconName::RefreshCw } else { IconName::Clock }).size_3()).child(label.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child(Icon::new(if label == "Fresh start" { IconName::RefreshCw } else { IconName::Clock }).size_3())
+                            .child(label.clone()),
+                    )
                     .child(div().text_size(px(15.)).line_height(relative(1.5)).text_color(p.ink).child(prompt.clone())),
             ),
             Msg::SignedIn { provider, prompt } => {
@@ -1931,7 +1979,9 @@ impl Eggbot {
                     .child(format!("Signed in to {}", if *provider == Provider::Codex { "Codex" } else { "Claude" }))
                     .when(prompt.is_some(), |d| d.child(button(("again", i), p).ml_2().on_click(cx.listener(move |this, _, _, cx| this.send_again(id, i, cx))).child("Send again")))
             }
-            Msg::Divider(label) => div().flex().items_center().gap_3().text_xs().text_color(p.muted).child(div().flex_1().h(px(1.)).bg(p.line)).child(label.clone()).child(div().flex_1().h(px(1.)).bg(p.line)),
+            Msg::Divider(label) => {
+                div().flex().items_center().gap_3().text_xs().text_color(p.muted).child(div().flex_1().h(px(1.)).bg(p.line)).child(label.clone()).child(div().flex_1().h(px(1.)).bg(p.line))
+            }
             Msg::Sent { to } => {
                 let to_name = to.clone();
                 div().child(
@@ -1964,7 +2014,11 @@ impl Eggbot {
                 .when(t.contains("Docker"), |d| d.child(button(("open-setup", i), p).ml_2().flex_none().on_click(cx.listener(|this, _, _, cx| this.open_setup(cx))).child("Open setup")))
                 .when(t.contains("/login") || t.contains("codex login"), |d| {
                     let codex = t.contains("codex login");
-                    d.child(button(("sign-in", i), p).ml_2().flex_none().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex { "Sign in to Codex" } else { "Sign in to Claude" }))
+                    d.child(button(("sign-in", i), p).ml_2().flex_none().on_click(cx.listener(move |this, _, _, cx| this.sign_in(codex, cx))).child(if codex {
+                        "Sign in to Codex"
+                    } else {
+                        "Sign in to Claude"
+                    }))
                 }),
             Msg::Tool { verb, target, detail, open, .. } => {
                 let (id, open) = (bot.id, *open);

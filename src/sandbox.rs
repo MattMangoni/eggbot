@@ -84,13 +84,7 @@ pub fn ready(status: &dyn Fn(&str)) -> Result<(), String> {
     let image = image();
     if docker(&["image", "inspect", &image]).is_err() {
         status("Building the bot machine (first time, about a minute)…");
-        let mut child = Command::new("docker")
-            .args(["build", "-q", "-t", &image, "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let mut child = Command::new("docker").args(["build", "-q", "-t", &image, "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
         child.stdin.take().unwrap().write_all(DOCKERFILE.as_bytes()).map_err(|e| e.to_string())?;
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
         if !out.status.success() {
@@ -260,9 +254,7 @@ fn mount_syntax_ok(path: &str) -> bool {
 }
 
 fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with(['-', '.'])
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    !name.is_empty() && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 fn check_folders(folders: &[Mount]) -> Result<(), String> {
@@ -425,7 +417,6 @@ mod tests {
         assert!(!engine_down("Not logged in · Please run /login"));
         assert!(!engine_down("claude stopped (exit status: 1). "));
     }
-
 
     fn mount(path: &str, name: &str) -> Mount {
         Mount { path: PathBuf::from(path), name: name.into() }

@@ -22,12 +22,7 @@ impl Tray {
     /// Menu clicks go to `tx`.
     pub fn new(tx: async_channel::Sender<Action>) -> Option<Self> {
         let frames = [egg_icon(0., false), egg_icon(-0.2, false), egg_icon(0.2, false), egg_icon(0., true)];
-        let icon = TrayIconBuilder::new()
-            .with_icon_templated(frames[0].clone())
-            .with_tooltip("eggbot")
-            .build()
-            .map_err(|e| eprintln!("eggbot: no menu bar icon: {e}"))
-            .ok()?;
+        let icon = TrayIconBuilder::new().with_icon_templated(frames[0].clone()).with_tooltip("eggbot").build().map_err(|e| eprintln!("eggbot: no menu bar icon: {e}")).ok()?;
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let action = match e.id.0.as_str() {
                 "open" => Action::Open,

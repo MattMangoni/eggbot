@@ -64,11 +64,7 @@ pub fn route(updates: &[Update], groups: &[&str]) -> Routed {
         match &update.group {
             None => private.push(plain(update)),
             Some(name) => {
-                let index = if name.is_empty() {
-                    (groups.len() == 1).then_some(0)
-                } else {
-                    groups.iter().position(|title| title.trim().eq_ignore_ascii_case(name))
-                };
+                let index = if name.is_empty() { (groups.len() == 1).then_some(0) } else { groups.iter().position(|title| title.trim().eq_ignore_ascii_case(name)) };
                 if let Some(index) = index {
                     buckets[index].push(plain(update));
                 }
@@ -99,9 +95,13 @@ fn section(title: &str, notes: &str, sole: bool) -> String {
     let how = if sole {
         "Add a durable bullet in the same <eggbot-learn> block with a group prefix, for example `- group preference: …` (fact, lesson, and forget work too; `shared` is the same prefix). A bullet without that prefix stays private. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.".to_string()
     } else {
-        format!("Name this group in the same <eggbot-learn> block, for example `- group {title} preference: …` (`shared` is the same prefix). A bullet without that prefix stays private. An unnamed group bullet is saved only when you are in one group. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.")
+        format!(
+            "Name this group in the same <eggbot-learn> block, for example `- group {title} preference: …` (`shared` is the same prefix). A bullet without that prefix stays private. An unnamed group bullet is saved only when you are in one group. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note."
+        )
     };
-    let intro = format!("\n\nGroup notes for \"{title}\", shared by the bots in this group and no one else. These are not your private notes. The current notes above are only /memory/NOTES.md. There is no lead. {how}\n");
+    let intro = format!(
+        "\n\nGroup notes for \"{title}\", shared by the bots in this group and no one else. These are not your private notes. The current notes above are only /memory/NOTES.md. There is no lead. {how}\n"
+    );
     let notes = notes.trim();
     if notes.is_empty() {
         return intro;

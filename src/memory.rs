@@ -149,10 +149,7 @@ fn parse_block(inner: &str) -> Vec<Update> {
 
 fn parse_update(line: &str) -> Option<Update> {
     let line = line.trim();
-    let rest = line
-        .strip_prefix('-')
-        .or_else(|| line.strip_prefix('*'))?
-        .trim();
+    let rest = line.strip_prefix('-').or_else(|| line.strip_prefix('*'))?.trim();
     if rest.is_empty() {
         return None;
     }
@@ -188,11 +185,7 @@ fn split_label<'a>(label: &str, text: &'a str, rest: &'a str) -> (Option<String>
     } else {
         (tail.join(" "), Kind::Lesson)
     };
-    if room_scope {
-        (None, Some(name), kind, text)
-    } else {
-        (Some(name), None, kind, text)
-    }
+    if room_scope { (None, Some(name), kind, text) } else { (Some(name), None, kind, text) }
 }
 
 fn kind_of(label: &str) -> Option<Kind> {
@@ -206,11 +199,7 @@ fn kind_of(label: &str) -> Option<Kind> {
 }
 
 fn parse(existing: &str) -> Doc {
-    let mut doc = Doc {
-        preamble: vec![],
-        sections: [empty(), empty(), empty()],
-        rest: vec![],
-    };
+    let mut doc = Doc { preamble: vec![], sections: [empty(), empty(), empty()], rest: vec![] };
     enum Mode {
         Preamble,
         Section(usize),
@@ -250,10 +239,7 @@ fn parse(existing: &str) -> Doc {
 }
 
 fn empty() -> Bucket {
-    Bucket {
-        loose: vec![],
-        bullets: vec![],
-    }
+    Bucket { loose: vec![], bullets: vec![] }
 }
 
 fn heading(line: &str) -> Option<&str> {
@@ -262,16 +248,11 @@ fn heading(line: &str) -> Option<&str> {
 }
 
 fn section_index(heading: &str) -> Option<usize> {
-    SECTIONS
-        .iter()
-        .position(|name| heading.eq_ignore_ascii_case(name))
+    SECTIONS.iter().position(|name| heading.eq_ignore_ascii_case(name))
 }
 
 fn bullet(line: &str) -> Option<String> {
-    let rest = line
-        .strip_prefix('-')
-        .or_else(|| line.strip_prefix('*'))?
-        .trim();
+    let rest = line.strip_prefix('-').or_else(|| line.strip_prefix('*'))?.trim();
     let text = clip(rest);
     (!text.is_empty()).then_some(text)
 }
@@ -341,12 +322,7 @@ fn render(doc: &Doc) -> String {
 }
 
 fn normalize(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim_end_matches('.')
-        .trim()
-        .to_lowercase()
+    s.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches('.').trim().to_lowercase()
 }
 
 fn clip(s: &str) -> String {
@@ -385,26 +361,14 @@ pub fn capped(notes: &str, where_rest: &str) -> String {
     if notes.is_empty() || notes.chars().count() <= MAX_INJECT {
         return notes;
     }
-    let cut = notes
-        .char_indices()
-        .nth(MAX_INJECT)
-        .map(|(i, _)| i)
-        .unwrap_or(notes.len());
-    let cut = notes[..cut]
-        .rfind('\n')
-        .filter(|i| *i > MAX_INJECT / 2)
-        .unwrap_or(cut);
-    format!(
-        "{}\n… (older notes omitted; the rest is in {where_rest})",
-        notes[..cut].trim_end()
-    )
+    let cut = notes.char_indices().nth(MAX_INJECT).map(|(i, _)| i).unwrap_or(notes.len());
+    let cut = notes[..cut].rfind('\n').filter(|i| *i > MAX_INJECT / 2).unwrap_or(cut);
+    format!("{}\n… (older notes omitted; the rest is in {where_rest})", notes[..cut].trim_end())
 }
 
 /// A note must not be able to close Codex's `<eggbot-context>` wrapper.
 pub(crate) fn neutralize(notes: &str) -> String {
-    notes
-        .replace("<eggbot-context>", "<eggbot-context >")
-        .replace("</eggbot-context>", "</eggbot-context >")
+    notes.replace("<eggbot-context>", "<eggbot-context >").replace("</eggbot-context>", "</eggbot-context >")
 }
 
 #[cfg(test)]
@@ -420,15 +384,7 @@ mod tests {
         let reply = "Shipped the fix.\n\n<eggbot-learn>\n- fact: Matteo uses OrbStack\n- preference: reply in Italian\n* lesson: do not push to git\n- forget: reply in English\n</eggbot-learn>\n";
         let (visible, updates) = extract(reply);
         assert_eq!(visible, "Shipped the fix.");
-        assert_eq!(
-            updates,
-            vec![
-                upd(Kind::Fact, "Matteo uses OrbStack"),
-                upd(Kind::Preference, "reply in Italian"),
-                upd(Kind::Lesson, "do not push to git"),
-                upd(Kind::Forget, "reply in English"),
-            ]
-        );
+        assert_eq!(updates, vec![upd(Kind::Fact, "Matteo uses OrbStack"), upd(Kind::Preference, "reply in Italian"), upd(Kind::Lesson, "do not push to git"), upd(Kind::Forget, "reply in English"),]);
     }
 
     #[test]
@@ -439,54 +395,23 @@ mod tests {
 
     #[test]
     fn an_unclosed_block_does_not_leak() {
-        let (visible, updates) =
-            extract("Done.\n<eggbot-learn>\n- fact: the tray is the menu bar egg");
+        let (visible, updates) = extract("Done.\n<eggbot-learn>\n- fact: the tray is the menu bar egg");
         assert_eq!(visible, "Done.");
-        assert_eq!(
-            updates,
-            vec![upd(Kind::Fact, "the tray is the menu bar egg")]
-        );
+        assert_eq!(updates, vec![upd(Kind::Fact, "the tray is the menu bar egg")]);
     }
 
     #[test]
     fn a_bare_bullet_is_a_lesson_and_placeholders_are_dropped() {
-        let (_, updates) = extract(
-            "<eggbot-learn>\n- match the repo style\n- fact: …\n- fact: hi\n</eggbot-learn>",
-        );
-        assert_eq!(
-            updates,
-            vec![
-                upd(Kind::Lesson, "match the repo style"),
-                upd(Kind::Fact, "hi")
-            ]
-        );
+        let (_, updates) = extract("<eggbot-learn>\n- match the repo style\n- fact: …\n- fact: hi\n</eggbot-learn>");
+        assert_eq!(updates, vec![upd(Kind::Lesson, "match the repo style"), upd(Kind::Fact, "hi")]);
     }
 
     #[test]
     fn learn_files_dedupes_and_forgets() {
-        let once = learn(
-            "",
-            &[
-                upd(Kind::Fact, "Matteo uses OrbStack"),
-                upd(Kind::Preference, "Reply in Italian."),
-                upd(Kind::Lesson, "do not push to git"),
-            ],
-        );
-        assert_eq!(
-            once,
-            "# Notes\n\n## Facts\n- Matteo uses OrbStack\n\n## Preferences\n- Reply in Italian.\n\n## Lessons\n- do not push to git\n"
-        );
-        let again = learn(
-            &once,
-            &[
-                upd(Kind::Fact, "matteo uses orbstack"),
-                upd(Kind::Fact, "Colima is the suggested engine"),
-                upd(Kind::Forget, "Reply in Italian"),
-            ],
-        );
-        assert!(
-            again.contains("## Facts\n- matteo uses orbstack\n- Colima is the suggested engine\n")
-        );
+        let once = learn("", &[upd(Kind::Fact, "Matteo uses OrbStack"), upd(Kind::Preference, "Reply in Italian."), upd(Kind::Lesson, "do not push to git")]);
+        assert_eq!(once, "# Notes\n\n## Facts\n- Matteo uses OrbStack\n\n## Preferences\n- Reply in Italian.\n\n## Lessons\n- do not push to git\n");
+        let again = learn(&once, &[upd(Kind::Fact, "matteo uses orbstack"), upd(Kind::Fact, "Colima is the suggested engine"), upd(Kind::Forget, "Reply in Italian")]);
+        assert!(again.contains("## Facts\n- matteo uses orbstack\n- Colima is the suggested engine\n"));
         assert!(!again.contains("Matteo uses OrbStack"));
         assert!(!again.contains("Italian"));
         assert!(again.contains("do not push to git"));
@@ -515,21 +440,12 @@ mod tests {
             updates.push(upd(Kind::Lesson, &format!("old lesson {n}")));
         }
         let full = learn("", &updates);
-        let next = learn(
-            &full,
-            &[
-                upd(Kind::Lesson, "brand new"),
-                upd(Kind::Lesson, "also new"),
-            ],
-        );
+        let next = learn(&full, &[upd(Kind::Lesson, "brand new"), upd(Kind::Lesson, "also new")]);
         let lessons = next.split("## Lessons\n").nth(1).unwrap();
         assert!(lessons.starts_with("- brand new\n- also new\n"));
         assert!(next.contains("old lesson 0"));
         assert!(!next.contains(&format!("old lesson {}", MAX_BULLETS - 1)));
-        assert_eq!(
-            lessons.lines().filter(|l| l.starts_with("- ")).count(),
-            MAX_BULLETS
-        );
+        assert_eq!(lessons.lines().filter(|l| l.starts_with("- ")).count(), MAX_BULLETS);
     }
 
     #[test]
@@ -564,7 +480,9 @@ mod tests {
 
     #[test]
     fn a_group_prefix_is_a_target_and_the_block_still_hides() {
-        let (visible, updates) = extract("Done.\n<eggbot-learn>\n- group preference: reply in Italian\n- shared Reviewers fact: uses OrbStack\n- group Code Reviewers lesson: check tests\n- preference: terse\n- group fact: …\n</eggbot-learn>\n");
+        let (visible, updates) = extract(
+            "Done.\n<eggbot-learn>\n- group preference: reply in Italian\n- shared Reviewers fact: uses OrbStack\n- group Code Reviewers lesson: check tests\n- preference: terse\n- group fact: …\n</eggbot-learn>\n",
+        );
         assert_eq!(visible, "Done.");
         assert_eq!(
             updates,
@@ -579,7 +497,9 @@ mod tests {
 
     #[test]
     fn a_room_prefix_is_a_target_and_the_block_still_hides() {
-        let (visible, updates) = extract("Done.\n<eggbot-learn>\n- room fact: standup is at nine\n- room Standup preference: reply in Italian\n- Room Design Review lesson: check tests\n- fact: terse\n- room fact: …\n</eggbot-learn>\n");
+        let (visible, updates) = extract(
+            "Done.\n<eggbot-learn>\n- room fact: standup is at nine\n- room Standup preference: reply in Italian\n- Room Design Review lesson: check tests\n- fact: terse\n- room fact: …\n</eggbot-learn>\n",
+        );
         assert_eq!(visible, "Done.");
         assert!(!visible.contains("nine"));
         assert_eq!(

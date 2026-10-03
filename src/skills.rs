@@ -43,10 +43,7 @@ pub fn defaults(preset: &str) -> Vec<Skill> {
                 "Critique the screen",
                 "Judge hierarchy, spacing, type, color, and alignment against what is already on the screen. For each point name a concrete change: what to move, resize, or restyle.",
             ),
-            skill(
-                "States and access",
-                "Cover empty, loading, error, and success, and keyboard focus and contrast. Call out anything a keyboard or screen-reader user cannot do.",
-            ),
+            skill("States and access", "Cover empty, loading, error, and success, and keyboard focus and contrast. Call out anything a keyboard or screen-reader user cannot do."),
         ],
         _ => vec![],
     }
@@ -83,9 +80,7 @@ pub fn section(skills: &[Skill]) -> String {
     if skills.is_empty() {
         return String::new();
     }
-    let mut out = String::from(
-        "\n\nSkills you always have. Follow one when the task matches it. A direct instruction from the user wins over a skill.\n",
-    );
+    let mut out = String::from("\n\nSkills you always have. Follow one when the task matches it. A direct instruction from the user wins over a skill.\n");
     for skill in skills {
         out.push_str("\n## ");
         out.push_str(&skill.name);

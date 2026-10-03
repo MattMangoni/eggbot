@@ -32,26 +32,37 @@ pub struct Room {
 /// One line of a room's transcript. Names are copied at the time, so a rename does not rewrite history.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Event {
-    Kickoff { to: usize, name: String, text: String },
-    Reply { bot: usize, name: String, color: u32, text: String },
+    Kickoff {
+        to: usize,
+        name: String,
+        text: String,
+    },
+    Reply {
+        bot: usize,
+        name: String,
+        color: u32,
+        text: String,
+    },
     /// `@Name` whose target is still a member of this room.
-    Handoff { from: usize, from_name: String, color: u32, to: usize, to_name: String, paused: bool },
+    Handoff {
+        from: usize,
+        from_name: String,
+        color: u32,
+        to: usize,
+        to_name: String,
+        paused: bool,
+    },
     /// The room turn failed or was stopped.
-    Trouble { bot: usize, name: String, text: String },
+    Trouble {
+        bot: usize,
+        name: String,
+        text: String,
+    },
 }
 
 impl Room {
     pub fn new(id: usize, title: String) -> Self {
-        Self {
-            id,
-            title,
-            kickoff: String::new(),
-            members: vec![],
-            facilitator: None,
-            unread: false,
-            started: false,
-            transcript: vec![],
-        }
+        Self { id, title, kickoff: String::new(), members: vec![], facilitator: None, unread: false, started: false, transcript: vec![] }
     }
 
     pub fn record_kickoff(&mut self, to: usize, name: &str, text: &str) {
@@ -73,14 +84,7 @@ impl Room {
     }
 
     pub fn record_handoff(&mut self, from: usize, from_name: &str, color: u32, to: usize, to_name: &str, paused: bool) {
-        self.transcript.push(Event::Handoff {
-            from,
-            from_name: from_name.to_string(),
-            color,
-            to,
-            to_name: to_name.to_string(),
-            paused,
-        });
+        self.transcript.push(Event::Handoff { from, from_name: from_name.to_string(), color, to, to_name: to_name.to_string(), paused });
     }
 
     pub fn record_trouble(&mut self, bot: usize, name: &str, text: &str) -> bool {
@@ -192,11 +196,7 @@ pub fn route(updates: &[Update], rooms: &[&str]) -> Routed {
         match &update.room {
             None => rest.push(update.clone()),
             Some(name) => {
-                let index = if name.is_empty() {
-                    (rooms.len() == 1).then_some(0)
-                } else {
-                    rooms.iter().position(|title| title.trim().eq_ignore_ascii_case(name))
-                };
+                let index = if name.is_empty() { (rooms.len() == 1).then_some(0) } else { rooms.iter().position(|title| title.trim().eq_ignore_ascii_case(name)) };
                 if let Some(index) = index {
                     buckets[index].push(plain(update));
                 }
@@ -230,9 +230,13 @@ fn section(title: &str, notes: &str, sole: bool) -> String {
     let how = if sole {
         "Add a durable bullet in the same <eggbot-learn> block with a room prefix, for example `- room fact: …` (preference, lesson, and forget work too). A bullet without that prefix stays private. A group or shared prefix still goes to that group's notes. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.".to_string()
     } else {
-        format!("Name this room in the same <eggbot-learn> block, for example `- room {title} fact: …` (preference, lesson, and forget work too). A bullet without a room prefix stays private. An unnamed room bullet is saved only when you are in one room. A group or shared prefix still goes to that group's notes. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note.")
+        format!(
+            "Name this room in the same <eggbot-learn> block, for example `- room {title} fact: …` (preference, lesson, and forget work too). A bullet without a room prefix stays private. An unnamed room bullet is saved only when you are in one room. A group or shared prefix still goes to that group's notes. eggbot saves it; you cannot open the file. Do not @Name a peer to pass a note."
+        )
     };
-    let intro = format!("\n\nRoom memory for \"{title}\", for this room only. Anyone who opens the room can read it. Only a member bot can add a bullet. This is not your private notes, not a group's notes, and not the transcript. The current notes above are only /memory/NOTES.md, then any group notes. There is no lead. {how}\n");
+    let intro = format!(
+        "\n\nRoom memory for \"{title}\", for this room only. Anyone who opens the room can read it. Only a member bot can add a bullet. This is not your private notes, not a group's notes, and not the transcript. The current notes above are only /memory/NOTES.md, then any group notes. There is no lead. {how}\n"
+    );
     let notes = notes.trim();
     if notes.is_empty() {
         return intro;
@@ -388,7 +392,9 @@ mod tests {
 
     #[test]
     fn private_group_and_room_forgets_stay_on_their_own_store() {
-        let (_, updates) = crate::memory::extract("<eggbot-learn>\n- preference: terse\n- group preference: reply in Italian\n- room fact: at nine\n- room forget: terse\n- group forget: at nine\n- forget: reply in Italian\n</eggbot-learn>");
+        let (_, updates) = crate::memory::extract(
+            "<eggbot-learn>\n- preference: terse\n- group preference: reply in Italian\n- room fact: at nine\n- room forget: terse\n- group forget: at nine\n- forget: reply in Italian\n</eggbot-learn>",
+        );
         let rooms = route(&updates, &["Standup"]);
         let groups = crate::group::route(&rooms.rest, &["Reviewers"]);
         let private = crate::memory::learn("# Notes\n\n## Preferences\n- terse\n- reply in Italian\n", &groups.private);

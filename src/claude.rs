@@ -50,12 +50,24 @@ pub enum Ev {
     Session(String),
     TextStart,
     Text(String),
-    Tool { id: String, name: String, target: String },
-    ToolResult { id: String, content: String },
+    Tool {
+        id: String,
+        name: String,
+        target: String,
+    },
+    ToolResult {
+        id: String,
+        content: String,
+    },
     Usage(Meter),
     /// Tokens in the session's context now, and/or the model's context window.
-    Context { used: Option<u64>, window: Option<u64> },
-    Done { error: Option<String> },
+    Context {
+        used: Option<u64>,
+        window: Option<u64>,
+    },
+    Done {
+        error: Option<String>,
+    },
 }
 
 type Interrupt = Box<dyn FnOnce() + Send>;
@@ -189,14 +201,8 @@ pub fn parse(line: &str) -> Vec<Ev> {
             }
             _ => vec![],
         },
-        "assistant" => blocks(&v)
-            .filter(|b| b["type"] == "tool_use")
-            .map(|b| Ev::Tool { id: str_of(&b["id"]), name: str_of(&b["name"]), target: target(&b["input"]) })
-            .collect(),
-        "user" => blocks(&v)
-            .filter(|b| b["type"] == "tool_result")
-            .map(|b| Ev::ToolResult { id: str_of(&b["tool_use_id"]), content: result_text(&b["content"]) })
-            .collect(),
+        "assistant" => blocks(&v).filter(|b| b["type"] == "tool_use").map(|b| Ev::Tool { id: str_of(&b["id"]), name: str_of(&b["name"]), target: target(&b["input"]) }).collect(),
+        "user" => blocks(&v).filter(|b| b["type"] == "tool_result").map(|b| Ev::ToolResult { id: str_of(&b["tool_use_id"]), content: result_text(&b["content"]) }).collect(),
         "rate_limit_event" => {
             let w = &v["rate_limit_info"]["unifiedWindows"];
             let window = |label: &str, k: &str| Window { label: label.into(), used: w[k]["utilization"].as_f64().unwrap_or(0.) as f32, reset: w[k]["resetsAt"].as_i64().unwrap_or(0) };
