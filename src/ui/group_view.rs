@@ -8,8 +8,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{TRAFFIC_INSET, button};
+use crate::app::{Eggbot, Panel};
 use crate::egg::egg;
-use crate::{Eggbot, Panel, hex};
+use crate::hex;
 
 impl Eggbot {
     /// Title, members, and their shared notes (read-only). Nothing here is a transcript.

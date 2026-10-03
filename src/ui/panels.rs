@@ -9,9 +9,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{button, field, heading, link, primary};
+use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Bot, Check, Eggbot, Panel, SHELLS, Setup, hex, login, sandbox};
+use crate::{Bot, Check, SHELLS, Setup, hex, login, sandbox};
 
 impl Eggbot {
     /// The first-run checklist: each row turns green on its own as the checks pass.

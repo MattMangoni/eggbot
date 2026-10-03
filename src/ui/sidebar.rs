@@ -9,10 +9,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{TRAFFIC_INSET, bar, soft_shadow};
+use crate::app::Eggbot;
 use crate::claude::{Meter, Provider};
 use crate::egg::{Mood, egg};
 use crate::usage;
-use crate::{Eggbot, PRESETS, Palette, hex};
+use crate::{PRESETS, Palette, hex};
 
 const ROW_H: f32 = 48.;
 const ROW_GAP: f32 = 2.;

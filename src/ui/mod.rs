@@ -3,10 +3,8 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::{
-    Appearance, CloseWindow, CycleAppearance, Dismiss, Eggbot, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, Palette, Panel, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar,
-    set_dock_icon,
-};
+use crate::app::{Eggbot, Panel};
+use crate::{Appearance, CloseWindow, CycleAppearance, Dismiss, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, Palette, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar, set_dock_icon};
 
 mod chat;
 mod composer;

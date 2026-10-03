@@ -9,8 +9,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{READ_W, TRAFFIC_INSET, button, primary};
+use crate::app::{Eggbot, Panel};
 use crate::egg::{Mood, egg};
-use crate::{Eggbot, Panel, handoff, hex};
+use crate::{handoff, hex};
 
 impl Eggbot {
     /// The room's transcript, then the roster. Start still talks to the facilitator only.
