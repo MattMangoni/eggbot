@@ -321,4 +321,17 @@ mod tests {
         assert_eq!(recent(&names, &["Designer"], 4), vec!["Designer"]);
         assert_eq!(recent(&names, &["Implementer", "Designer"], 1), vec!["Implementer"]);
     }
+
+    #[test]
+    fn room_kickoff_resumes_like_a_handoff_without_spending_a_hop() {
+        let prompt = crate::room::prompt("Standup", "What shipped?", &[crate::room::Peer { name: "Implementer", blurb: "Writes code" }]);
+        let mut turn = Pending::handoff(prompt, 0);
+        turn.room = Some(4);
+        assert!(turn.inflight());
+        assert_eq!(turn.hops, 0);
+        assert!(!turn.fresh);
+        let restored = restore(Some(turn), vec![]);
+        assert_eq!(restored[0].room, Some(4));
+        assert_eq!(restored[0].hops, 0);
+    }
 }
