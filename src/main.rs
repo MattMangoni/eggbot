@@ -17,7 +17,6 @@ mod usage;
 
 use app::Eggbot;
 use gpui_kit::assets::Assets;
-use gpui_kit::component::select::SelectItem;
 use gpui_kit::*;
 use ui::theme::Appearance;
 
@@ -49,27 +48,6 @@ impl AssetSource for AppAssets {
         Ok(paths)
     }
 }
-
-/// A dropdown option: what is shown, and what is stored (None = the provider's default).
-#[derive(Clone)]
-struct Choice {
-    value: Option<String>,
-    label: SharedString,
-}
-
-impl SelectItem for Choice {
-    type Value = Option<String>;
-
-    fn title(&self) -> SharedString {
-        self.label.clone()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.value
-    }
-}
-
-const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
 impl Eggbot {
     /// ⌘B hides or shows the bot list. The width stays, and the choice is saved.

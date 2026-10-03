@@ -8,7 +8,7 @@ use crate::ui::theme::{Appearance, Palette};
 use crate::{CloseWindow, CycleAppearance, Dismiss, Find, FocusInput, NewBot, NextBot, OpenSettings, OpenSetup, PrevBot, Quit, SelectBot, StopTurn, ToggleSidebar, set_dock_icon};
 
 mod chat;
-mod composer;
+pub(crate) mod composer;
 mod group_view;
 mod panels;
 mod room_view;

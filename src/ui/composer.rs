@@ -2,7 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Textarea;
-use gpui_kit::component::select::Select;
+use gpui_kit::component::select::{Select, SelectItem};
 use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -12,7 +12,27 @@ use crate::app::bot::Bot;
 use crate::app::{Eggbot, Panel};
 use crate::claude::Provider;
 use crate::usage;
-use crate::{Choice, MODELS};
+
+/// A dropdown option: what is shown, and what is stored (None = the provider's default).
+#[derive(Clone)]
+pub(crate) struct Choice {
+    pub(crate) value: Option<String>,
+    pub(crate) label: SharedString,
+}
+
+impl SelectItem for Choice {
+    type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+const MODELS: [(Option<&str>, &str); 5] = [(None, "Default"), (Some("fable"), "Fable"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
 
 impl Eggbot {
     /// Fills the model and effort dropdowns for the selected bot (options depend on provider and model).

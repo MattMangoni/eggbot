@@ -10,8 +10,9 @@ use crate::app::bot::Bot;
 use crate::app::setup::Setup;
 use crate::app::state::{Saved, data_dir, default_sidebar, default_sidebar_open};
 use crate::claude::{Meter, Provider};
+use crate::ui::composer::Choice;
 use crate::ui::theme::{Appearance, Palette};
-use crate::{Choice, codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
+use crate::{codex, group, notify, room, sandbox, set_dock_icon, tray, usage};
 
 pub(crate) mod bot;
 mod chat;
