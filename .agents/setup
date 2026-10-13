@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Amp orb setup: Rust toolchain plus a warm macOS cross-check (eggbot cannot build natively on Linux).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+mac_target=aarch64-apple-darwin
+step() { echo "==> $1 ($SECONDS s)"; }
+
+step "rust toolchain"
+if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --component rustfmt,clippy --target "$mac_target"
+fi
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env"
+rustup component add rustfmt clippy
+rustup target add "$mac_target"
+
+step "login shell PATH"
+marker="# eggbot: cargo on PATH"
+if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+  printf '\n%s\n. "$HOME/.cargo/env"\n' "$marker" >> "$HOME/.bash_profile"
+fi
+
+step "default cargo target"
+# objc2 only compiles for Apple targets, so plain `cargo check`/`cargo clippy` in the orb cross-check for macOS
+cat > "$HOME/.cargo/config.toml" <<EOF
+[build]
+target = "$mac_target"
+EOF
+
+step "cargo fetch"
+cargo fetch --locked
+
+step "gpui shader stub"
+# gpui-pre-apple's build.rs only writes stitched_shaders.metal on a macOS host; an empty stub is enough for check/clippy
+out_dir=$({ cargo check --all-targets --locked --message-format=json 2>/dev/null || true; } |
+  jq -r 'select(.reason == "build-script-executed" and (.package_id | contains("gpui-pre-apple"))) | .out_dir' | head -n1)
+if [ -z "$out_dir" ]; then
+  echo "could not find the gpui-pre-apple build output dir" >&2
+  exit 1
+fi
+[ -f "$out_dir/stitched_shaders.metal" ] || : > "$out_dir/stitched_shaders.metal"
+
+step "warm clippy"
+cargo clippy --all-targets --locked || echo "warning: clippy failed; the dependency cache is still warm" >&2
+
+step "orb notes"
+notes="$HOME/.config/amp/AGENTS.md"
+marker="# eggbot in an Amp orb"
+if ! grep -Fqx "$marker" "$notes" 2>/dev/null; then
+  mkdir -p "$(dirname "$notes")"
+  cat >> "$notes" <<'EOF'
+
+# eggbot in an Amp orb
+
+- The orb is Linux; eggbot is macOS-only (objc2, Metal). `cargo` defaults to `--target aarch64-apple-darwin` here via `~/.cargo/config.toml`.
+- Works: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`.
+- Does not work: `cargo test`, `cargo build`, `cargo run`, `scripts/bundle.sh` (no macOS linker or Metal). Say so instead of claiming tests pass; CI on macOS runs them.
+- If check fails with a missing `stitched_shaders.metal`, rerun `.agents/setup`.
+EOF
+fi
+
+step "done"

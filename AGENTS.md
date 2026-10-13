@@ -60,7 +60,8 @@ A native macOS app (Rust + GPUI) that hosts always-on AI bots. Each bot has a ro
 - `src/egg.rs` — small vector egg avatar (still, or wobbling while working).
 - `docker/bot.Dockerfile` — the bot machine image.
 - `scripts/icon.swift` — draws the app icon (used by `bundle.sh`).
-- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`, `notifications.md`.
+- `.agents/setup` — Amp orb setup: Rust plus a macOS cross-check (see `docs/kb/orbs.md`).
+- `docs/kb/` — knowledge base: `decisions.md`, `auth.md`, `gpui.md`, `claude-cli.md`, `sandbox.md`, `handoff.md`, `schedules.md`, `codex.md`, `context.md`, `notifications.md`, `orbs.md`.
 
 ## Hard rules
 
